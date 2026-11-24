@@ -295,22 +295,22 @@ function onOrientation(event: Event) {
     heading = normalize(degrees);
     headingSamples = [{degrees: normalize(degrees), at: now}];
   } else {
-    // A short circular median rejects single magnetometer spikes before the
-    // slower adaptive low-pass filter. This keeps small sensor noise calm but
-    // still follows a deliberate turn without a fixed long delay.
-    headingSamples = headingSamples.filter(sample => now - sample.at <= 750);
+    // Keep a short circular median to reject isolated sensor spikes. Use a
+    // fixed response time: adapting from the raw sample spread made magnetic
+    // noise look like a deliberate turn and could either snap or lag badly.
+    headingSamples = headingSamples.filter(sample => now - sample.at <= 500);
     headingSamples.push({degrees: normalize(degrees), at: now});
-    if (headingSamples.length > 7) headingSamples.shift();
+    if (headingSamples.length > 5) headingSamples.shift();
     const offsets = headingSamples.map(sample => ((sample.degrees - heading! + 540) % 360) - 180).sort((a,b) => a-b);
     const middle = Math.floor(offsets.length / 2);
     const targetDelta = offsets.length % 2 ? offsets[middle] : (offsets[middle - 1] + offsets[middle]) / 2;
-    const first = headingSamples[0], last = headingSamples[headingSamples.length - 1];
-    const rawSpan = Math.abs(((last.degrees - first.degrees + 540) % 360) - 180);
-    const sampleRate = rawSpan / Math.max(1, last.at - first.at) * 1000;
-    const smoothingMs = sampleRate < 10 ? 1600 : sampleRate < 35 ? 900 : 300;
     const elapsed = headingLastAt ? Math.min(1000, now - headingLastAt) : 50;
-    const movement = targetDelta * (1 - Math.exp(-elapsed / smoothingMs));
-    if (Math.abs(movement) < 0.22) { headingLastAt = now; orientationEvents++; return; }
+    const smoothed = targetDelta * (1 - Math.exp(-elapsed / 250));
+    // Limit the displayed bearing's rate of change so a single bad compass
+    // sample cannot throw markers across the field. Normal aiming turns are
+    // comfortably below this cap.
+    const movement = Math.max(-elapsed * 0.18, Math.min(elapsed * 0.18, smoothed));
+    if (Math.abs(movement) < 0.3) { headingLastAt = now; orientationEvents++; return; }
     heading = normalize(heading + movement);
   }
   headingLastAt = now; orientationEvents++;
