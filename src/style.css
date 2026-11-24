@@ -2,3 +2,18 @@
 @media(min-width:650px){.app-shell{padding-left:28px;padding-right:28px}.field{height:480px}.marker{width:168px}.marker-card strong{font-size:11px}.filter-row{gap:10px}}
 @media(max-width:390px){.app-shell{padding-left:14px;padding-right:14px}.field{min-height:360px}.filter-row select{font-size:9px;padding-left:7px}.marker{width:122px}.marker-card{padding:6px}.site-card{grid-template-columns:33px 1fr auto;gap:8px;padding:10px}}
 .data-footer .attribution{color:#a7c3b7;font:9px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+/* Keep the field and target cards constrained to the phone viewport. */
+html,body{width:100%;min-width:0;overflow-x:hidden}
+.app-shell{width:100%;min-width:0}
+.field{width:100%}
+.marker-layer{top:15%;height:55%}
+.marker-card{width:min(145px,31vw)}
+.marker.offscreen .marker-pin{background:#f4c96d;box-shadow:0 0 0 5px #f4c96d31,0 0 18px #f4c96d}
+.focused-target{position:absolute;z-index:4;top:62px;left:50%;transform:translateX(-50%);max-width:calc(100% - 32px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:8px 11px;border:1px solid #8ee3be77;border-radius:999px;background:#10201fee;color:#b7f1d5;font:10px var(--mono);pointer-events:auto}
+.site-card{width:100%;min-width:0;grid-template-columns:37px minmax(0,1fr) auto;text-align:left}
+.site-main,.site-title,.site-title strong,.site-meta{min-width:0}
+.site-card.selected{border-color:#8ee3be;background:#1b302d;box-shadow:0 0 0 1px #8ee3be36}
+.site-card.selected .site-direction{background:#8ee3be;color:#10201a}
+.site-meta{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;white-space:normal;overflow:hidden;line-height:1.35}
+.site-distance{white-space:nowrap}
+@media(max-width:390px){.site-card{grid-template-columns:33px minmax(0,1fr) auto}}

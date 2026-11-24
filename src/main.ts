@@ -28,6 +28,7 @@ let cameraStream: MediaStream | null = null;
 let watchId: number | null = null;
 let usingManualOrigin = false;
 let nearbySites: Nearby[] = [];
+let focusedSiteId: string | null = null;
 let headingLastAt = 0;
 let orientationEvents = 0;
 let sortNearest = true;
@@ -65,6 +66,7 @@ function updateNearby() {
   nearbySites = dataset.sites.map(site => ({ ...site, distance: distanceBetween(origin!, site), bearing: bearingBetween(origin!, site), relative: 0 }))
     .filter(site => site.distance <= radius)
     .sort((a,b) => a.distance - b.distance);
+  if (focusedSiteId && !nearbySites.some(site => site.id === focusedSiteId)) focusedSiteId = null;
   nearbySites.forEach(site => site.relative = heading === null ? site.bearing : normalize(site.bearing - heading));
   renderSites(); renderMarkers(); renderRadar();
 }
@@ -77,11 +79,23 @@ function renderSites() {
   if (!items.length) {
     const message = !tileCatalog ? 'FCC coverage catalog unavailable' : !origin ? 'Start to find nearby sites' : !dataset ? 'Loading nearby FCC tiles' : nearbySites.length ? 'No sites match these filters' : 'No active records in this radius';
     list.innerHTML = `<div class="list-empty"><span>⌁</span><strong>${message}</strong><p>${!tileCatalog ? 'No current FCC tile catalog is installed. The app will not substitute another country or region.' : !origin ? 'Tap Start to use live location, or set a local manual origin. Only coarse FCC data tiles around the chosen radius are downloaded; exact coordinates stay on this phone.' : 'The phone filters licensed records locally. Your precise location is never sent to the data service.'}</p></div>`;
+    updateFocusedTarget();
     return;
   }
   const ordered = [...items].sort((a,b) => sortNearest ? a.distance - b.distance : a.bearing - b.bearing);
-  list.innerHTML = ordered.map(site => `<button class="site-card" data-site="${escapeHtml(site.id)}"><span class="site-direction">${compassPoint(site.bearing)}</span><span class="site-main"><span class="site-title"><strong>${escapeHtml(site.siteName || site.licensee || site.callSign)}</strong>${site.confirmedSafeT ? '<span class="badge confirmed">SAFE-T</span>' : isPublicSafety(site) ? '<span class="badge">PUBLIC SAFETY</span>' : '<span class="badge">ACTIVE LICENSE</span>'}</span><span class="site-meta">${escapeHtml(site.callSign)} · ${escapeHtml(site.licensee)} · ${escapeHtml(site.serviceName)} · ${site.country}</span></span><span class="site-distance">${formatDistance(site.distance)}<small>${Math.round(site.bearing)}° ${compassPoint(site.bearing)}</small></span></button>`).join('');
-  list.querySelectorAll<HTMLButtonElement>('.site-card').forEach(button => button.addEventListener('click', () => showSite(button.dataset.site || '')));
+  list.innerHTML = ordered.map(site => `<button class="site-card${site.id === focusedSiteId ? ' selected' : ''}" data-site="${escapeHtml(site.id)}" aria-pressed="${site.id === focusedSiteId}" title="Show only this site in the field view"><span class="site-direction">${compassPoint(site.bearing)}</span><span class="site-main"><span class="site-title"><strong>${escapeHtml(site.siteName || site.licensee || site.callSign)}</strong>${site.confirmedSafeT ? '<span class="badge confirmed">SAFE-T</span>' : isPublicSafety(site) ? '<span class="badge">PUBLIC SAFETY</span>' : '<span class="badge">ACTIVE LICENSE</span>'}</span><span class="site-meta">${escapeHtml(site.callSign)} · ${escapeHtml(site.licensee)} · ${escapeHtml(site.serviceName)} · ${site.country}</span></span><span class="site-distance">${formatDistance(site.distance)}<small>${Math.round(site.bearing)}° ${compassPoint(site.bearing)}</small></span></button>`).join('');
+  list.querySelectorAll<HTMLButtonElement>('.site-card').forEach(button => button.addEventListener('click', () => {
+    focusedSiteId = focusedSiteId === button.dataset.site ? null : button.dataset.site || null;
+    renderSites(); renderMarkers();
+  }));
+  updateFocusedTarget();
+}
+function updateFocusedTarget() {
+  const control = $('focused-target') as HTMLButtonElement;
+  const site = nearbySites.find(item => item.id === focusedSiteId);
+  control.classList.toggle('hidden', !site);
+  control.textContent = site ? `AIMING: ${site.siteName || site.callSign} · CLEAR ×` : '';
+  control.title = site ? 'Clear selected target and show nearby markers' : '';
 }
 function escapeHtml(value: string) { return value.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!)); }
 
@@ -89,22 +103,36 @@ function renderMarkers() {
   markers.innerHTML = '';
   if (!field.classList.contains('camera-on') || heading === null) return;
   const fov = 58;
-  const onscreen = visibleSites().filter(s => {
+  const candidates = visibleSites().filter(s => focusedSiteId === null || s.id === focusedSiteId).filter(s => {
     const delta = ((s.bearing - heading! + 540) % 360) - 180;
     s.relative = normalize(delta);
-    return Math.abs(delta) <= fov / 2;
-  }).sort((a,b) => a.relative - b.relative);
-  const placed: {x:number;y:number}[] = [];
-  const nodes = onscreen.slice(0, 12).map((site,index) => {
+    return focusedSiteId !== null || Math.abs(delta) <= fov / 2;
+  }).sort((a,b) => a.distance - b.distance);
+  // Dense urban areas often have dozens of license records at the same bearing.
+  // Show one readable representative per 12° sector; the list remains complete,
+  // and selecting a row isolates that exact site in the camera view.
+  const onscreen: Nearby[] = [];
+  const occupiedSectors = new Set<number>();
+  for (const site of candidates) {
+    const delta = ((site.bearing - heading! + 540) % 360) - 180;
+    const sector = Math.round(delta / 12);
+    if (focusedSiteId !== null || !occupiedSectors.has(sector)) {
+      onscreen.push(site);
+      occupiedSectors.add(sector);
+    }
+    if (onscreen.length >= (focusedSiteId ? 1 : 5)) break;
+  }
+  const nodes = onscreen.map((site,index) => {
     const delta = ((site.bearing - heading! + 540) % 360) - 180;
     const x = Math.max(11, Math.min(89, 50 + delta / (fov / 2) * 50));
-    let y = 11 + (index % 3) * 22;
-    for (const prior of placed) if (Math.abs(prior.x-x) < 19 && Math.abs(prior.y-y) < 14) y = Math.min(72, y + 17);
-    placed.push({x,y});
+    const row = index % 3;
+    const y = 8 + row * 34;
     const node = document.createElement('button');
-    node.className = `marker${site.confirmedSafeT ? ' confirmed' : ''}`;
+    const offscreen = Math.abs(delta) > fov / 2;
+    node.className = `marker${site.confirmedSafeT ? ' confirmed' : ''}${offscreen ? ' offscreen' : ''}`;
     node.style.left = `${x}%`; node.style.top = `${y}%`; node.setAttribute('aria-label', `${site.callSign}, ${Math.round(site.bearing)} degrees ${compassPoint(site.bearing)}, ${formatDistance(site.distance)}`);
-    node.innerHTML = `<span class="marker-pin"></span><span class="marker-card"><strong>${escapeHtml(site.siteName || site.callSign)}</strong><span>${Math.round(site.bearing)}° ${compassPoint(site.bearing)} · ${formatDistance(site.distance)}</span></span>`;
+    const cue = offscreen ? (delta > 0 ? 'TURN RIGHT' : 'TURN LEFT') : `${Math.round(site.bearing)}° ${compassPoint(site.bearing)}`;
+    node.innerHTML = `<span class="marker-pin"></span><span class="marker-card"><strong>${escapeHtml(site.siteName || site.callSign)}</strong><span>${cue} · ${formatDistance(site.distance)}</span></span>`;
     node.addEventListener('click', () => showSite(site.id));
     return node;
   });
@@ -113,7 +141,7 @@ function renderMarkers() {
 function renderRadar() {
   radarPoints.innerHTML = '';
   const max = Number(radiusInput.value);
-  for (const site of visibleSites().slice(0, 40)) {
+  for (const site of visibleSites().filter(item => focusedSiteId === null || item.id === focusedSiteId).slice(0, focusedSiteId ? 1 : 40)) {
     const distance = Math.min(0.46, site.distance / max * 0.46), angle = site.bearing * Math.PI / 180;
     const dot = document.createElement('i'); dot.className = `radar-dot${site.confirmedSafeT ? ' confirmed' : ''}`;
     dot.style.left = `${50 + Math.sin(angle) * distance * 100}%`; dot.style.top = `${50 - Math.cos(angle) * distance * 100}%`; dot.title = `${site.callSign} ${Math.round(site.bearing)}°`;
@@ -175,7 +203,10 @@ function onOrientation(event: Event) {
   const e = event as DeviceOrientationEvent & { webkitCompassHeading?:number; webkitCompassAccuracy?:number; absolute?:boolean };
   let degrees: number | null = null;
   if (typeof e.webkitCompassHeading === 'number' && (e.webkitCompassAccuracy === undefined || e.webkitCompassAccuracy < 45)) degrees = e.webkitCompassHeading;
-  else if (e.absolute && typeof e.alpha === 'number') degrees = 360 - e.alpha;
+  else if (e.absolute && typeof e.alpha === 'number') {
+    const screenAngle = screen.orientation?.angle ?? (typeof window.orientation === 'number' ? window.orientation : 0);
+    degrees = normalize(360 - e.alpha + screenAngle);
+  }
   if (degrees === null) return;
   const now = Date.now(); if (now - headingLastAt < 75) return; headingLastAt = now; orientationEvents++;
   heading = normalize(degrees); $('heading').textContent = `${String(Math.round(heading)).padStart(3,'0')}°`; $('cardinal').textContent = compassPoint(heading); $('sensor-warning').classList.add('hidden');
@@ -307,6 +338,7 @@ $('sort-button').addEventListener('click', () => { sortNearest = !sortNearest; $
 $('settings-toggle').addEventListener('click', () => ($('settings-dialog') as HTMLDialogElement).showModal());
 $('origin-edit').addEventListener('click', () => ($('origin-dialog') as HTMLDialogElement).showModal());
 $('start-button').addEventListener('click', () => { if (field.classList.contains('started')) { locationStop(); } else void startField(); });
+$('focused-target').addEventListener('click', () => { focusedSiteId = null; renderSites(); renderMarkers(); });
 function locationStop() {
   if (watchId !== null) navigator.geolocation.clearWatch(watchId); watchId = null;
   cameraStream?.getTracks().forEach(track => track.stop()); cameraStream = null; video.srcObject = null;
