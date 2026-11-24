@@ -38,3 +38,4 @@ html,body{width:100%;min-width:0;overflow-x:hidden}
 .marker.edge-left .marker-card{left:0;right:auto;transform:none}
 .marker.edge-right .marker-card{left:auto;right:0;transform:none;text-align:right}
 .marker.focused{z-index:5}
+.marker{transition:left 180ms ease-out}

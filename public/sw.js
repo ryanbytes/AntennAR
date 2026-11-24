@@ -1,4 +1,4 @@
-const CACHE = 'antennar-shell-v8';
+const CACHE = 'antennar-shell-v9';
 const BASE = new URL(self.registration.scope).pathname;
 const SHELL = [BASE, `${BASE}manifest.webmanifest`, `${BASE}icons/icon.svg`];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting())));

@@ -32,6 +32,7 @@ let nearbySites: Nearby[] = [];
 let focusedSiteId: string | null = null;
 let headingLastAt = 0;
 let headingSamples: { degrees: number; at: number }[] = [];
+let locationSamples: { lat: number; lon: number; accuracy: number; at: number }[] = [];
 let orientationEvents = 0;
 let sortNearest = true;
 
@@ -40,7 +41,7 @@ function bearingBetween(a: Origin, b: Site) {
   const y = Math.sin(dl) * Math.cos(p2), x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
-function distanceBetween(a: Origin, b: Site) {
+function distanceBetween(a: Pick<Origin, 'lat' | 'lon'>, b: Pick<Origin, 'lat' | 'lon'>) {
   const rad = Math.PI / 180, dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
   return 3958.7613 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
@@ -93,7 +94,11 @@ function updateNearby() {
   nearbySites.forEach(site => site.relative = heading === null ? site.bearing : normalize(site.bearing - heading));
   renderSites(); renderMarkers(); renderRadar();
 }
-function updateRelative() { nearbySites.forEach(site => site.relative = heading === null ? site.bearing : normalize(site.bearing - heading)); renderMarkers(); renderRadar(); }
+function updateRelative() {
+  nearbySites.forEach(site => site.relative = heading === null ? site.bearing : normalize(site.bearing - heading));
+  renderMarkers();
+  if (field.classList.contains('radar-on')) renderRadar();
+}
 
 function renderSites() {
   const items = visibleSites();
@@ -215,7 +220,27 @@ function requestLocation() {
   if (!navigator.geolocation) { $('origin-label').textContent = 'Location unavailable'; return; }
   if (watchId !== null) navigator.geolocation.clearWatch(watchId);
   watchId = navigator.geolocation.watchPosition(position => {
-    origin = {lat:position.coords.latitude,lon:position.coords.longitude,label:'Live device location'}; usingManualOrigin = false;
+    const now = Date.now();
+    locationSamples = locationSamples.filter(sample => now - sample.at <= 8000);
+    locationSamples.push({lat:position.coords.latitude,lon:position.coords.longitude,accuracy:position.coords.accuracy,at:now});
+    if (locationSamples.length > 7) locationSamples.shift();
+    const median = (values: number[]) => values.sort((a,b) => a-b)[Math.floor(values.length / 2)];
+    const next = {
+      lat: median(locationSamples.map(sample => sample.lat)),
+      lon: median(locationSamples.map(sample => sample.lon)),
+      label: 'Live device location'
+    };
+    if (origin && !usingManualOrigin) {
+      const displacement = distanceBetween(origin, next) * 1609.344;
+      if (displacement < 0.6) return;
+      const accuracy = median(locationSamples.map(sample => sample.accuracy));
+      const first = locationSamples[0], last = locationSamples[locationSamples.length - 1];
+      const sampleSpeed = distanceBetween(first, last) * 1609.344 / Math.max(1, (last.at - first.at) / 1000);
+      const weight = sampleSpeed > 0.8 ? 0.45 : displacement > accuracy * 2 ? 0.5 : 0.1;
+      next.lat = origin.lat + (next.lat - origin.lat) * weight;
+      next.lon = origin.lon + (next.lon - origin.lon) * weight;
+    }
+    origin = next; usingManualOrigin = false;
     $('gps-dot').classList.add('active'); $('origin-label').textContent = 'Using live device location'; updateNearby(); void loadNearbyTiles();
   }, () => { if (!origin) $('origin-label').textContent = 'Location denied · set an origin'; $('gps-dot').classList.remove('active'); }, {enableHighAccuracy:true,maximumAge:15000,timeout:12000});
 }
@@ -246,7 +271,7 @@ function onOrientation(event: Event) {
   }
   if (degrees === null) return;
   const now = Date.now();
-  if (now - headingLastAt < 50) return;
+  if (now - headingLastAt < 100) return;
   if (heading === null) {
     heading = normalize(degrees);
     headingSamples = [{degrees: normalize(degrees), at: now}];
@@ -254,7 +279,7 @@ function onOrientation(event: Event) {
     // A short circular median rejects single magnetometer spikes before the
     // slower adaptive low-pass filter. This keeps small sensor noise calm but
     // still follows a deliberate turn without a fixed long delay.
-    headingSamples = headingSamples.filter(sample => now - sample.at <= 360);
+    headingSamples = headingSamples.filter(sample => now - sample.at <= 750);
     headingSamples.push({degrees: normalize(degrees), at: now});
     if (headingSamples.length > 7) headingSamples.shift();
     const offsets = headingSamples.map(sample => ((sample.degrees - heading! + 540) % 360) - 180).sort((a,b) => a-b);
@@ -263,7 +288,7 @@ function onOrientation(event: Event) {
     const first = headingSamples[0], last = headingSamples[headingSamples.length - 1];
     const rawSpan = Math.abs(((last.degrees - first.degrees + 540) % 360) - 180);
     const sampleRate = rawSpan / Math.max(1, last.at - first.at) * 1000;
-    const smoothingMs = sampleRate < 10 ? 950 : sampleRate < 35 ? 620 : 300;
+    const smoothingMs = sampleRate < 10 ? 1600 : sampleRate < 35 ? 900 : 300;
     const elapsed = headingLastAt ? Math.min(1000, now - headingLastAt) : 50;
     const movement = targetDelta * (1 - Math.exp(-elapsed / smoothingMs));
     if (Math.abs(movement) < 0.22) { headingLastAt = now; orientationEvents++; return; }
