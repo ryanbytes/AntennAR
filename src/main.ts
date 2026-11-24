@@ -298,19 +298,19 @@ function onOrientation(event: Event) {
     // Keep a short circular median to reject isolated sensor spikes. Use a
     // fixed response time: adapting from the raw sample spread made magnetic
     // noise look like a deliberate turn and could either snap or lag badly.
-    headingSamples = headingSamples.filter(sample => now - sample.at <= 500);
+    headingSamples = headingSamples.filter(sample => now - sample.at <= 1000);
     headingSamples.push({degrees: normalize(degrees), at: now});
-    if (headingSamples.length > 5) headingSamples.shift();
+    if (headingSamples.length > 9) headingSamples.shift();
     const offsets = headingSamples.map(sample => ((sample.degrees - heading! + 540) % 360) - 180).sort((a,b) => a-b);
     const middle = Math.floor(offsets.length / 2);
     const targetDelta = offsets.length % 2 ? offsets[middle] : (offsets[middle - 1] + offsets[middle]) / 2;
     const elapsed = headingLastAt ? Math.min(1000, now - headingLastAt) : 50;
-    const smoothed = targetDelta * (1 - Math.exp(-elapsed / 250));
+    const smoothed = targetDelta * (1 - Math.exp(-elapsed / 700));
     // Limit the displayed bearing's rate of change so a single bad compass
     // sample cannot throw markers across the field. Normal aiming turns are
     // comfortably below this cap.
-    const movement = Math.max(-elapsed * 0.18, Math.min(elapsed * 0.18, smoothed));
-    if (Math.abs(movement) < 0.3) { headingLastAt = now; orientationEvents++; return; }
+    const movement = Math.max(-elapsed * 0.06, Math.min(elapsed * 0.06, smoothed));
+    if (Math.abs(movement) < 0.35) { headingLastAt = now; orientationEvents++; return; }
     heading = normalize(heading + movement);
   }
   headingLastAt = now; orientationEvents++;
@@ -458,4 +458,4 @@ const saved = localStorage.getItem('antennar.manual-origin');
 if (saved) try { const point=JSON.parse(saved) as {lat:number;lon:number}; if (Number.isFinite(point.lat)&&Number.isFinite(point.lon)) { origin={...point,label:'Manual origin · stored on this device'}; usingManualOrigin=true; $('origin-label').textContent='Using manual origin · on device'; $('gps-dot').classList.add('active'); } } catch { localStorage.removeItem('antennar.manual-origin'); }
 window.addEventListener('beforeunload', locationStop);
 void loadDataset();
-if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js?refresh=20261124-compass2`, { scope: import.meta.env.BASE_URL, updateViaCache: 'none' });
+if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js?refresh=20261124-compass3`, { scope: import.meta.env.BASE_URL, updateViaCache: 'none' });
