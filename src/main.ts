@@ -124,12 +124,13 @@ function renderMarkers() {
   }
   const nodes = onscreen.map((site,index) => {
     const delta = ((site.bearing - heading! + 540) % 360) - 180;
-    const x = Math.max(11, Math.min(89, 50 + delta / (fov / 2) * 50));
+    const x = Math.max(3, Math.min(97, 50 + delta / (fov / 2) * 50));
     const row = index % 3;
     const y = 8 + row * 34;
     const node = document.createElement('button');
     const offscreen = Math.abs(delta) > fov / 2;
-    node.className = `marker${site.confirmedSafeT ? ' confirmed' : ''}${offscreen ? ' offscreen' : ''}`;
+    const edge = x < 18 ? ' edge-left' : x > 82 ? ' edge-right' : '';
+    node.className = `marker${site.confirmedSafeT ? ' confirmed' : ''}${offscreen ? ' offscreen' : ''}${edge}`;
     node.style.left = `${x}%`; node.style.top = `${y}%`; node.setAttribute('aria-label', `${site.callSign}, ${Math.round(site.bearing)} degrees ${compassPoint(site.bearing)}, ${formatDistance(site.distance)}`);
     const cue = offscreen ? (delta > 0 ? 'TURN RIGHT' : 'TURN LEFT') : `${Math.round(site.bearing)}° ${compassPoint(site.bearing)}`;
     node.innerHTML = `<span class="marker-pin"></span><span class="marker-card"><strong>${escapeHtml(site.siteName || site.callSign)}</strong><span>${cue} · ${formatDistance(site.distance)}</span></span>`;

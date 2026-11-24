@@ -17,3 +17,7 @@ html,body{width:100%;min-width:0;overflow-x:hidden}
 .site-meta{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;white-space:normal;overflow:hidden;line-height:1.35}
 .site-distance{white-space:nowrap}
 @media(max-width:390px){.site-card{grid-template-columns:33px minmax(0,1fr) auto}}
+.marker{display:block;width:9px;height:9px;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font:inherit;box-shadow:none;appearance:none;-webkit-appearance:none}
+.marker-card{position:absolute;top:17px;left:50%;width:min(145px,52vw);margin:0;transform:translateX(-50%)}
+.marker.edge-left .marker-card{left:0;transform:none;text-align:left}
+.marker.edge-right .marker-card{left:auto;right:0;transform:none;text-align:right}
