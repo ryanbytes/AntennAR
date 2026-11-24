@@ -354,4 +354,4 @@ const saved = localStorage.getItem('antennar.manual-origin');
 if (saved) try { const point=JSON.parse(saved) as {lat:number;lon:number}; if (Number.isFinite(point.lat)&&Number.isFinite(point.lon)) { origin={...point,label:'Manual origin · stored on this device'}; usingManualOrigin=true; $('origin-label').textContent='Using manual origin · on device'; $('gps-dot').classList.add('active'); } } catch { localStorage.removeItem('antennar.manual-origin'); }
 window.addEventListener('beforeunload', locationStop);
 void loadDataset();
-if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL });
+if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js?refresh=20261124`, { scope: import.meta.env.BASE_URL, updateViaCache: 'none' });

@@ -1,8 +1,12 @@
-const CACHE = 'antennar-shell-v5';
+const CACHE = 'antennar-shell-v6';
 const BASE = new URL(self.registration.scope).pathname;
 const SHELL = [BASE, `${BASE}manifest.webmanifest`, `${BASE}icons/icon.svg`];
-self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL))));
-self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));
+self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting())));
+self.addEventListener('activate', event => event.waitUntil((async () => {
+  const keys = await caches.keys();
+  await Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)));
+  await self.clients.claim();
+})()));
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin || event.request.method !== 'GET') return;
