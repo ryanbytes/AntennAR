@@ -32,6 +32,7 @@ let nearbySites: Nearby[] = [];
 let focusedSiteId: string | null = null;
 let headingLastAt = 0;
 let headingSamples: { degrees: number; at: number }[] = [];
+let orientationEventType: 'deviceorientation' | 'deviceorientationabsolute' = 'deviceorientation';
 let locationSamples: { lat: number; lon: number; accuracy: number; at: number }[] = [];
 let orientationEvents = 0;
 let sortNearest = true;
@@ -246,16 +247,25 @@ function requestLocation() {
 }
 function requestOrientationPermission(): Promise<boolean> {
   if (typeof DeviceOrientationEvent === 'undefined') return Promise.resolve(false);
-  type OrientationCtor = typeof DeviceOrientationEvent & { requestPermission?: () => Promise<'granted'|'denied'> };
+  type OrientationCtor = typeof DeviceOrientationEvent & { requestPermission?: (absolute?: boolean) => Promise<'granted'|'denied'> };
   const EventCtor = DeviceOrientationEvent as OrientationCtor;
   if (typeof EventCtor.requestPermission !== 'function') return Promise.resolve(true);
   // Invoke synchronously from Start's click handler; iOS requires transient user activation.
-  try { return EventCtor.requestPermission().then(permission => permission === 'granted').catch(() => false); }
+  try { return EventCtor.requestPermission(true).then(permission => permission === 'granted').catch(() => false); }
   catch { return Promise.resolve(false); }
 }
 function attachOrientation() {
-  window.addEventListener('deviceorientation', onOrientation, true);
-  window.addEventListener('deviceorientationabsolute', onOrientation as EventListener, true);
+  // Prefer one event stream. If the regular event never yields an absolute
+  // compass sample, switch to the absolute-only event rather than merging both.
+  orientationEventType = 'deviceorientation';
+  window.addEventListener(orientationEventType, onOrientation as EventListener, true);
+  setTimeout(() => {
+    if (orientationEvents === 0 && field.classList.contains('started')) {
+      window.removeEventListener(orientationEventType, onOrientation as EventListener, true);
+      orientationEventType = 'deviceorientationabsolute';
+      window.addEventListener(orientationEventType, onOrientation as EventListener, true);
+    }
+  }, 1200);
   $('cardinal').textContent = 'CALIBRATING'; $('radar').setAttribute('aria-hidden','false');
   setTimeout(() => {
     if (orientationEvents === 0) showHeadingHelp('Heading is unavailable. Move outdoors, calibrate the compass, or use radar bearings relative to north.');
@@ -265,10 +275,7 @@ function onOrientation(event: Event) {
   const e = event as DeviceOrientationEvent & { webkitCompassHeading?:number; webkitCompassAccuracy?:number; absolute?:boolean };
   let degrees: number | null = null;
   if (typeof e.webkitCompassHeading === 'number' && (e.webkitCompassAccuracy === undefined || e.webkitCompassAccuracy < 45)) degrees = e.webkitCompassHeading;
-  else if (e.absolute && typeof e.alpha === 'number') {
-    const screenAngle = screen.orientation?.angle ?? (typeof window.orientation === 'number' ? window.orientation : 0);
-    degrees = normalize(360 - e.alpha + screenAngle);
-  }
+  else if (e.absolute && typeof e.alpha === 'number') degrees = normalize(360 - e.alpha);
   if (degrees === null) return;
   const now = Date.now();
   if (now - headingLastAt < 100) return;
@@ -428,7 +435,7 @@ $('focused-target').addEventListener('click', () => { focusedSiteId = null; rend
 function locationStop() {
   if (watchId !== null) navigator.geolocation.clearWatch(watchId); watchId = null;
   cameraStream?.getTracks().forEach(track => track.stop()); cameraStream = null; video.srcObject = null;
-  window.removeEventListener('deviceorientation', onOrientation, true); window.removeEventListener('deviceorientationabsolute', onOrientation as EventListener, true);
+  window.removeEventListener(orientationEventType, onOrientation as EventListener, true);
   field.classList.remove('started','camera-on'); $('start-label').textContent='Start field view'; $('start-button').querySelector('.start-icon')!.textContent='▶'; $('view-mode').textContent='RADAR VIEW';
   heading = null; headingLastAt = 0; headingSamples = []; orientationEvents = 0; $('heading').textContent='—'; $('cardinal').textContent='HEADING'; field.classList.remove('radar-on'); renderMarkers(); renderRadar();
 }
