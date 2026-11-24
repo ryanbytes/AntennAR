@@ -31,6 +31,7 @@ let usingManualOrigin = false;
 let nearbySites: Nearby[] = [];
 let focusedSiteId: string | null = null;
 let headingLastAt = 0;
+let headingSamples: { degrees: number; at: number }[] = [];
 let orientationEvents = 0;
 let sortNearest = true;
 
@@ -129,7 +130,9 @@ function renderMarkers() {
   const candidates = visibleSites().filter(s => focusedSiteId === null || s.id === focusedSiteId).filter(s => {
     const delta = ((s.bearing - heading! + 540) % 360) - 180;
     s.relative = normalize(delta);
-    return focusedSiteId !== null || Math.abs(delta) <= fov / 2;
+    // Keep a small edge buffer so sensor noise does not make a target appear
+    // and disappear as the phone points near the camera's viewing limit.
+    return focusedSiteId !== null || Math.abs(delta) <= fov / 2 + 7;
   }).sort((a,b) => a.distance - b.distance);
   // Dense urban areas often have dozens of license records at the same bearing.
   // Show one readable representative per 12° sector; the list remains complete,
@@ -244,12 +247,27 @@ function onOrientation(event: Event) {
   if (degrees === null) return;
   const now = Date.now();
   if (now - headingLastAt < 50) return;
-  const elapsed = headingLastAt ? Math.min(1000, now - headingLastAt) : 0;
-  if (heading === null) heading = normalize(degrees);
-  else {
-    const delta = ((degrees - heading + 540) % 360) - 180;
-    const smoothing = 1 - Math.exp(-elapsed / 360);
-    heading = normalize(heading + delta * smoothing);
+  if (heading === null) {
+    heading = normalize(degrees);
+    headingSamples = [{degrees: normalize(degrees), at: now}];
+  } else {
+    // A short circular median rejects single magnetometer spikes before the
+    // slower adaptive low-pass filter. This keeps small sensor noise calm but
+    // still follows a deliberate turn without a fixed long delay.
+    headingSamples = headingSamples.filter(sample => now - sample.at <= 360);
+    headingSamples.push({degrees: normalize(degrees), at: now});
+    if (headingSamples.length > 7) headingSamples.shift();
+    const offsets = headingSamples.map(sample => ((sample.degrees - heading! + 540) % 360) - 180).sort((a,b) => a-b);
+    const middle = Math.floor(offsets.length / 2);
+    const targetDelta = offsets.length % 2 ? offsets[middle] : (offsets[middle - 1] + offsets[middle]) / 2;
+    const first = headingSamples[0], last = headingSamples[headingSamples.length - 1];
+    const rawSpan = Math.abs(((last.degrees - first.degrees + 540) % 360) - 180);
+    const sampleRate = rawSpan / Math.max(1, last.at - first.at) * 1000;
+    const smoothingMs = sampleRate < 10 ? 950 : sampleRate < 35 ? 620 : 300;
+    const elapsed = headingLastAt ? Math.min(1000, now - headingLastAt) : 50;
+    const movement = targetDelta * (1 - Math.exp(-elapsed / smoothingMs));
+    if (Math.abs(movement) < 0.22) { headingLastAt = now; orientationEvents++; return; }
+    heading = normalize(heading + movement);
   }
   headingLastAt = now; orientationEvents++;
   $('heading').textContent = `${String(Math.round(heading)).padStart(3,'0')}°`; $('cardinal').textContent = compassPoint(heading); $('sensor-warning').classList.add('hidden');
@@ -387,7 +405,7 @@ function locationStop() {
   cameraStream?.getTracks().forEach(track => track.stop()); cameraStream = null; video.srcObject = null;
   window.removeEventListener('deviceorientation', onOrientation, true); window.removeEventListener('deviceorientationabsolute', onOrientation as EventListener, true);
   field.classList.remove('started','camera-on'); $('start-label').textContent='Start field view'; $('start-button').querySelector('.start-icon')!.textContent='▶'; $('view-mode').textContent='RADAR VIEW';
-  heading = null; orientationEvents = 0; $('heading').textContent='—'; $('cardinal').textContent='HEADING'; field.classList.remove('radar-on'); renderMarkers(); renderRadar();
+  heading = null; headingLastAt = 0; headingSamples = []; orientationEvents = 0; $('heading').textContent='—'; $('cardinal').textContent='HEADING'; field.classList.remove('radar-on'); renderMarkers(); renderRadar();
 }
 $('save-origin').addEventListener('click', () => saveManualOrigin(($('manual-lat') as HTMLInputElement).value, ($('manual-lon') as HTMLInputElement).value));
 $('quick-save').addEventListener('click', () => saveManualOrigin(($('quick-lat') as HTMLInputElement).value, ($('quick-lon') as HTMLInputElement).value));
