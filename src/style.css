@@ -39,3 +39,4 @@ html,body{width:100%;min-width:0;overflow-x:hidden}
 .marker.edge-right .marker-card{left:auto;right:0;transform:none;text-align:right}
 .marker.focused{z-index:5}
 .marker{transition:left 180ms ease-out}
+.scope-pill{display:inline-flex;align-items:center;min-height:31px;padding:0 10px;border:1px solid #78643a;border-radius:9px;background:#282317;color:#f4d589;font:9px var(--mono);letter-spacing:.04em}

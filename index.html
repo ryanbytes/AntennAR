@@ -51,14 +51,13 @@
       </section>
 
       <section class="nearby-section">
-        <div class="section-heading"><div><p class="eyebrow">FIELD TARGETS</p><h1>Nearby sites <span id="nearby-total">0</span></h1></div><button class="text-button" id="sort-button">Nearest first ↓</button></div>
+        <div class="section-heading"><div><p class="eyebrow">FIELD TARGETS</p><h1>Nearby SAFE-T sites <span id="nearby-total">0</span></h1></div><button class="text-button" id="sort-button">Nearest first ↓</button></div>
         <div class="filter-row">
-          <label class="filter-toggle"><input id="show-public-safety" type="checkbox" checked /><span>Public safety</span></label>
-          <label class="filter-toggle"><input id="show-other" type="checkbox" checked /><span>Other active</span></label>
+          <span class="scope-pill">CONFIRMED SAFE-T ONLY</span>
           <select id="service-filter" aria-label="Filter by radio service"><option value="all">All included services</option></select>
           <select id="frequency-filter" aria-label="Filter by frequency range"><option value="all">All frequencies</option><option value="vhf">VHF · 30–300 MHz</option><option value="uhf">UHF · 300–1000 MHz</option><option value="700800">700/800 MHz</option><option value="other">Other</option></select>
         </div>
-        <div class="site-list" id="site-list"><div class="list-empty"><span>⌁</span><strong>Start to find nearby sites</strong><p>Site records are filtered on this phone. Your location is never sent to the data service.</p></div></div>
+        <div class="site-list" id="site-list"><div class="list-empty"><span>⌁</span><strong>Start to find nearby SAFE-T sites</strong><p>Only confirmed SAFE-T matches are shown. Site records and location filtering stay on this phone.</p></div></div>
       </section>
 
       <footer class="data-footer"><div class="data-indicator"><span class="data-dot"></span><span id="data-status">FCC data not loaded</span></div><span id="data-date">No source date</span><span class="attribution" id="data-attribution"></span><p>Coverage: FCC ULS site-oriented license archives with mapped location records. Broadcast LMS licenses, market-only authorizations, and records without usable coordinates are not included. The phone requests coarse 0.5° cells around the selected radius; exact coordinates stay on this device. An active license does not prove a transmitter is on air, a tower is visible, or a path is clear.</p></footer>
@@ -68,7 +67,7 @@
       <form method="dialog"><div class="sheet-grabber"></div><div class="sheet-header"><div><p class="eyebrow">LOCAL SETTINGS</p><h2>Field setup</h2></div><button class="icon-button" aria-label="Close settings">×</button></div>
         <div class="setting-block"><h3>Origin override</h3><p>Use your live device location by default. A manual origin is stored only on this device.</p><div class="coordinate-fields"><label>Latitude<input id="manual-lat" inputmode="decimal" placeholder="Latitude" /></label><label>Longitude<input id="manual-lon" inputmode="decimal" placeholder="Longitude" /></label></div><div class="setting-actions"><button type="button" class="secondary-button" id="save-origin">Save origin on device</button><button type="button" class="quiet-button" id="clear-origin">Use device location</button></div></div>
         <div class="setting-block"><h3>Sensor help</h3><p>Camera and compass work only in a secure HTTPS context (localhost is allowed for development). On iPhone, tap Start to grant motion and compass access. If the heading looks jumpy, calibrate the compass away from metal and electronics, or use the radar view.</p></div>
-        <div class="setting-block"><h3>Data scope</h3><p id="filter-explainer">Filter the locally installed country, service, and frequency records.</p><p>SAFE-T is marked confirmed only when a record is explicitly cross-referenced by the optional reviewed SAFE-T match file.</p></div>
+        <div class="setting-block"><h3>Data scope</h3><p id="filter-explainer">Only FCC records explicitly cross-referenced by a reviewed SAFE-T match are shown. Nearby public-safety licenses without a confirmed match are hidden.</p><p>An FCC license does not prove a transmitter is on air or that the radio path is clear. The current snapshot has no reviewed SAFE-T matches.</p></div>
       </form>
     </dialog>
 

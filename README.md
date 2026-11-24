@@ -20,7 +20,7 @@ npm run preview
 
 ## FCC data
 
-The FCC layer is derived from official FCC ULS complete license public-access ZIP files. The importer reads `HD` records with license status `A`, joins their current location (`LO`), entity (`EN`), and frequency (`FR`) records, and retains locations with usable coordinates. The LO “Site Status” field is a protection code, not an Active/Inactive flag; it is not used as a license-status filter. Site-based records in a complete current license archive are used only when the parent license is Active.
+The FCC layer is derived from official FCC ULS complete license public-access ZIP files. The importer reads `HD` records with license status `A`, joins their current location (`LO`), entity (`EN`), and frequency (`FR`) records, and retains locations with usable coordinates. The LO “Site Status” field is a protection code, not an Active/Inactive flag; it is not used as a license-status filter. Site-based records in a complete current license archive are used only when the parent license is Active. The current field view is narrowed to reviewed SAFE-T matches only; other active licenses are hidden.
 
 Import every U.S. state and territory into versioned 0.5-degree geographic cells:
 

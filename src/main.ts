@@ -108,7 +108,7 @@ function inFrequencyFilter(site: Site) {
   return site.frequencies.some(inBand);
 }
 function visibleSites() {
-  return nearbySites.filter(s => (isPublicSafety(s) ? ($('show-public-safety') as HTMLInputElement).checked : ($('show-other') as HTMLInputElement).checked)
+  return nearbySites.filter(s => s.confirmedSafeT === true
     && (serviceFilter.value === 'all' || s.service === serviceFilter.value) && inFrequencyFilter(s));
 }
 function updateNearby() {
@@ -134,8 +134,12 @@ function renderSites() {
   $('nearby-total').textContent = String(items.length);
   $('site-count').textContent = items.length ? `${items.length} nearby ${items.length === 1 ? 'site' : 'sites'}` : 'No nearby sites';
   if (!items.length) {
-    const message = !tileCatalog ? 'FCC coverage catalog unavailable' : !origin ? 'Start to find nearby sites' : !dataset ? 'Loading nearby FCC tiles' : nearbySites.length ? 'No sites match these filters' : 'No active records in this radius';
-    list.innerHTML = `<div class="list-empty"><span>⌁</span><strong>${message}</strong><p>${!tileCatalog ? 'No current FCC tile catalog is installed. The app will not substitute another country or region.' : !origin ? 'Tap Start to use live location, or set a local manual origin. Only coarse FCC data tiles around the chosen radius are downloaded; exact coordinates stay on this phone.' : 'The phone filters licensed records locally. Your precise location is never sent to the data service.'}</p></div>`;
+    const hasConfirmed = nearbySites.some(site => site.confirmedSafeT === true);
+    const message = !tileCatalog ? 'FCC coverage catalog unavailable' : !origin ? 'Start to find nearby SAFE-T sites' : !dataset ? 'Loading nearby FCC tiles' : nearbySites.length && !hasConfirmed ? 'No confirmed SAFE-T matches in this radius' : nearbySites.length ? 'No SAFE-T sites match these filters' : 'No active records in this radius';
+    const explanation = nearbySites.length && !hasConfirmed
+      ? 'This view only shows FCC records with an explicit reviewed SAFE-T cross-reference. Nearby active public-safety licenses are hidden unless they are confirmed matches.'
+      : !tileCatalog ? 'No current FCC tile catalog is installed. The app will not substitute another country or region.' : !origin ? 'Tap Start to use live location, or set a local manual origin. Only coarse FCC data tiles around the chosen radius are downloaded; exact coordinates stay on this phone.' : 'The phone filters licensed records locally. Your precise location is never sent to the data service.';
+    list.innerHTML = `<div class="list-empty"><span>⌁</span><strong>${message}</strong><p>${explanation}</p></div>`;
     updateFocusedTarget();
     return;
   }
@@ -443,7 +447,7 @@ async function loadDataset() {
     for (const [code, name] of Object.entries(tileCatalog.services)) { const option=document.createElement('option'); option.value=code; option.textContent=`${name} · ${code}`; serviceFilter.append(option); }
     $('data-status').textContent = `FCC ULS · ${tileCatalog.tileCount.toLocaleString()} populated geographic tiles`;
     $('data-date').textContent = `Source ${tileCatalog.sourceDate} · imported ${tileCatalog.importedAt}`;
-    $('filter-explainer').textContent = `FCC ULS site-oriented records only. The phone requests versioned 0.5° geographic cells around the current radius, downloads new cells as you move, and caches them on this device. Exact coordinates are not sent; service and frequency filters run locally. ${tileCatalog.siteCount.toLocaleString()} mapped active license locations are available across ${tileCatalog.tileCount.toLocaleString()} populated cells.`;
+    $('filter-explainer').textContent = `The field view shows only FCC records explicitly cross-referenced by a reviewed SAFE-T match. Other active public-safety and commercial licenses are hidden. The phone requests versioned 0.5° geographic cells around the current radius, downloads new cells as you move, and caches them on this device; exact coordinates are not sent. This snapshot contains no reviewed SAFE-T matches among ${tileCatalog.siteCount.toLocaleString()} mapped active FCC locations.`;
     if (origin) void loadNearbyTiles(); else renderSites();
   } catch {
     tileCatalog = null; dataset = null; tileById.clear();
@@ -456,7 +460,6 @@ async function loadDataset() {
 }
 
 radiusInput.addEventListener('input', () => { updateNearby(); void loadNearbyTiles(); });
-for (const id of ['show-public-safety','show-other']) $(id).addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
 serviceFilter.addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
 frequencyFilter.addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
 $('sort-button').addEventListener('click', () => { sortNearest = !sortNearest; $('sort-button').textContent = sortNearest ? 'Nearest first ↓' : 'Direction ↑'; renderSites(); });
@@ -479,4 +482,4 @@ const saved = localStorage.getItem('antennar.manual-origin');
 if (saved) try { const point=JSON.parse(saved) as {lat:number;lon:number}; if (Number.isFinite(point.lat)&&Number.isFinite(point.lon)) { origin={...point,label:'Manual origin · stored on this device'}; usingManualOrigin=true; $('origin-label').textContent='Using manual origin · on device'; $('gps-dot').classList.add('active'); } } catch { localStorage.removeItem('antennar.manual-origin'); }
 window.addEventListener('beforeunload', locationStop);
 void loadDataset();
-if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js?refresh=20261124-azimuth-guide1`, { scope: import.meta.env.BASE_URL, updateViaCache: 'none' });
+if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js?refresh=20261124-safe-t-only1`, { scope: import.meta.env.BASE_URL, updateViaCache: 'none' });
