@@ -61,7 +61,13 @@ function compassPoint(deg: number) { return ['N','NE','E','SE','S','SW','W','NW'
 function normalize(deg: number) { return (deg + 360) % 360; }
 function formatDistance(miles: number) { return miles < 1 ? `${(miles * 5280 / 100).toFixed(0)} ft` : `${miles.toFixed(miles < 10 ? 1 : 0)} mi`; }
 function formatSize(bytes: number) { return bytes < 1_000_000 ? `${Math.max(1, Math.round(bytes / 1000))} KB` : `${(bytes / 1_000_000).toFixed(1)} MB`; }
-function isPublicSafety(site: Site) { return ['PW','GE','GF','GP','YE','YF','YP','SG','SY','YW','PA','SL','SP','QM','QO','QT','NC'].includes(site.service); }
+function isPublicSafety(site: Site) {
+  // FCC service descriptions are the authoritative category signal when they
+  // explicitly identify a service as public safety (including MW microwave).
+  // Keep known public-safety codes for descriptions that are less specific.
+  return /public safety/i.test(site.serviceName)
+    || ['PW','GE','GF','GP','YE','YF','YP','SG','SY','YW','PA','SL','SP','QM','QT'].includes(site.service);
+}
 type ServiceKind = 'public-safety' | 'broadcast' | 'microwave' | 'aviation' | 'mobile' | 'radio';
 function serviceKind(site: Site): ServiceKind {
   const label = `${site.serviceName} ${site.service}`.toLowerCase();
@@ -458,4 +464,4 @@ const saved = localStorage.getItem('antennar.manual-origin');
 if (saved) try { const point=JSON.parse(saved) as {lat:number;lon:number}; if (Number.isFinite(point.lat)&&Number.isFinite(point.lon)) { origin={...point,label:'Manual origin · stored on this device'}; usingManualOrigin=true; $('origin-label').textContent='Using manual origin · on device'; $('gps-dot').classList.add('active'); } } catch { localStorage.removeItem('antennar.manual-origin'); }
 window.addEventListener('beforeunload', locationStop);
 void loadDataset();
-if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js?refresh=20261124-compass3`, { scope: import.meta.env.BASE_URL, updateViaCache: 'none' });
+if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js?refresh=20261124-public-safety1`, { scope: import.meta.env.BASE_URL, updateViaCache: 'none' });
