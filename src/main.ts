@@ -17,6 +17,7 @@ const field = $('field'), video = $('camera') as HTMLVideoElement, markers = $('
 const markerNodes = new Map<string, HTMLButtonElement>();
 const list = $('site-list'), radiusInput = $('radius') as HTMLInputElement;
 const serviceFilter = $('service-filter') as HTMLSelectElement, frequencyFilter = $('frequency-filter') as HTMLSelectElement;
+const CAMERA_FOV = 58;
 let dataset: Dataset | null = null;
 let tileCatalog: TileCatalog | null = null;
 const tileById = new Map<string, TileInfo>();
@@ -59,6 +60,17 @@ function distanceBetween(a: Pick<Origin, 'lat' | 'lon'>, b: Pick<Origin, 'lat' |
 }
 function compassPoint(deg: number) { return ['N','NE','E','SE','S','SW','W','NW'][Math.round(deg / 45) % 8]; }
 function normalize(deg: number) { return (deg + 360) % 360; }
+function renderAzimuthGuide() {
+  if (heading === null) {
+    $('azimuth-left').textContent = $('azimuth-center').textContent = $('azimuth-right').textContent = '—';
+    return;
+  }
+  const edge = CAMERA_FOV / 2;
+  const label = (bearing: number) => `${String(Math.round(normalize(bearing))).padStart(3, '0')}° ${compassPoint(bearing)}`;
+  $('azimuth-left').textContent = label(heading - edge);
+  $('azimuth-center').textContent = label(heading);
+  $('azimuth-right').textContent = label(heading + edge);
+}
 function formatDistance(miles: number) { return miles < 1 ? `${(miles * 5280 / 100).toFixed(0)} ft` : `${miles.toFixed(miles < 10 ? 1 : 0)} mi`; }
 function formatSize(bytes: number) { return bytes < 1_000_000 ? `${Math.max(1, Math.round(bytes / 1000))} KB` : `${(bytes / 1_000_000).toFixed(1)} MB`; }
 function isPublicSafety(site: Site) {
@@ -148,7 +160,7 @@ function renderMarkers() {
   if (!field.classList.contains('camera-on') || heading === null) {
     markers.replaceChildren(); markerNodes.clear(); return;
   }
-  const fov = 58;
+  const fov = CAMERA_FOV;
   const candidates = visibleSites().filter(s => focusedSiteId === null || s.id === focusedSiteId).filter(s => {
     const delta = ((s.bearing - heading! + 540) % 360) - 180;
     s.relative = normalize(delta);
@@ -321,11 +333,13 @@ function onOrientation(event: Event) {
   }
   headingLastAt = now; orientationEvents++;
   $('heading').textContent = `${String(Math.round(heading)).padStart(3,'0')}°`; $('cardinal').textContent = compassPoint(heading); $('sensor-warning').classList.add('hidden');
+  renderAzimuthGuide();
   if (field.classList.contains('camera-on')) field.classList.remove('radar-on'); else field.classList.add('radar-on');
   updateRelative();
 }
 function showHeadingHelp(message: string) {
   heading = null; $('heading').textContent = '—'; $('cardinal').textContent = 'NO HEADING';
+  renderAzimuthGuide();
   field.classList.remove('camera-on'); field.classList.add('radar-on'); $('view-mode').textContent = 'RADAR VIEW';
   $('sensor-warning').textContent = message; $('sensor-warning').classList.remove('hidden'); updateNearby();
 }
@@ -456,6 +470,7 @@ function locationStop() {
   window.removeEventListener(orientationEventType, onOrientation as EventListener, true);
   field.classList.remove('started','camera-on'); $('start-label').textContent='Start field view'; $('start-button').querySelector('.start-icon')!.textContent='▶'; $('view-mode').textContent='RADAR VIEW';
   heading = null; headingLastAt = 0; headingSamples = []; orientationEvents = 0; $('heading').textContent='—'; $('cardinal').textContent='HEADING'; field.classList.remove('radar-on'); renderMarkers(); renderRadar();
+  renderAzimuthGuide();
 }
 $('save-origin').addEventListener('click', () => saveManualOrigin(($('manual-lat') as HTMLInputElement).value, ($('manual-lon') as HTMLInputElement).value));
 $('quick-save').addEventListener('click', () => saveManualOrigin(($('quick-lat') as HTMLInputElement).value, ($('quick-lon') as HTMLInputElement).value));
@@ -464,4 +479,4 @@ const saved = localStorage.getItem('antennar.manual-origin');
 if (saved) try { const point=JSON.parse(saved) as {lat:number;lon:number}; if (Number.isFinite(point.lat)&&Number.isFinite(point.lon)) { origin={...point,label:'Manual origin · stored on this device'}; usingManualOrigin=true; $('origin-label').textContent='Using manual origin · on device'; $('gps-dot').classList.add('active'); } } catch { localStorage.removeItem('antennar.manual-origin'); }
 window.addEventListener('beforeunload', locationStop);
 void loadDataset();
-if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js?refresh=20261124-public-safety1`, { scope: import.meta.env.BASE_URL, updateViaCache: 'none' });
+if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js?refresh=20261124-azimuth-guide1`, { scope: import.meta.env.BASE_URL, updateViaCache: 'none' });
