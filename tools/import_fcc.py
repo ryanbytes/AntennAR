@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
+import math
 import re
 import sys
 import urllib.request
@@ -14,7 +16,7 @@ from pathlib import Path
 
 BASE = "https://data.fcc.gov/download/pub/uls/complete/"
 # These are FCC public-access complete-license archive groups, not radio-service codes.
-ARCHIVES = ["aircr", "amat", "brs", "cell", "coast", "gmrs", "LMbcast", "LMpriv", "micro", "paging", "ship"]
+ARCHIVES = ["aircr", "amat", "cell", "coast", "gmrs", "LMbcast", "LMpriv", "micro", "paging", "ship"]
 SERVICE_NAMES = {
     "AC": "Aircraft", "HA": "Amateur", "HV": "Amateur vanity", "BR": "Broadband Radio Service",
     "ED": "Educational Broadband Service", "MD": "Multipoint Distribution Service", "VX": "Instructional Television Fixed Service",
@@ -122,7 +124,11 @@ def read_archive(name: str, states: set[str], data: bytes, matches: dict[tuple[s
         if len(row) < 43 or row[0] != "LO" or row[1].strip() not in licenses:
             continue
         state = row[14].strip().upper()
-        if state not in states or row[9].strip().upper() != "A":
+        # HD license_status is the active/inactive authorization test. LO's
+        # Site Status field describes protection (P/S) and is commonly blank;
+        # it is not an Active flag. Complete license snapshots contain the
+        # current location rows for each license.
+        if state not in states:
             continue
         lat = decimal_dms(row[19], row[20], row[21], row[22]); lon = decimal_dms(row[23], row[24], row[25], row[26])
         if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
@@ -145,10 +151,12 @@ def read_archive(name: str, states: set[str], data: bytes, matches: dict[tuple[s
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--states", required=True, help="Comma-separated US state abbreviations; required to keep the phone dataset region-sized")
+    parser.add_argument("--states", required=True, help="Comma-separated US state abbreviations and territories to import")
     parser.add_argument("--archives", default=",".join(ARCHIVES), help="Comma-separated FCC complete archive groups (default: all site-based groups with transmitter location records)")
+    parser.add_argument("--input-dir", type=Path, help="Use official FCC ZIP files already downloaded into this directory")
     parser.add_argument("--safe-t-matches", type=Path, help="Optional reviewed exact ULS system/location match list")
     parser.add_argument("--output", type=Path, default=Path("public/data/fcc-sites.json"))
+    parser.add_argument("--spatial-tiles", action="store_true", help="Write versioned 0.5-degree cells so phones download only cells around their local origin and radius")
     args = parser.parse_args()
     states = {x.strip().upper() for x in args.states.split(",") if x.strip()}
     archives = list(dict.fromkeys(x.strip() for x in args.archives.split(",") if x.strip()))
@@ -158,23 +166,70 @@ def main() -> None:
     matches = load_safe_t_matches(args.safe_t_matches)
     source_date = datetime.min.replace(tzinfo=timezone.utc)
     for archive in archives:
-        sites, stamp = read_archive(archive, states, get(BASE + f"l_{archive}.zip"), matches)
+        local_archive = args.input_dir / f"l_{archive}.zip" if args.input_dir else None
+        data = local_archive.read_bytes() if local_archive and local_archive.is_file() else get(BASE + f"l_{archive}.zip")
+        if not zipfile.is_zipfile(BytesIO(data)):
+            raise RuntimeError(f"FCC input was not a ZIP archive: {local_archive or archive}")
+        sites, stamp = read_archive(archive, states, data, matches)
         all_sites.extend(sites); source_date = max(source_date, stamp)
         print(f"{archive}: {len(sites):,} active locations", file=sys.stderr)
     # Site records can be duplicated between archive groups; one service's record wins.
     compact = {site["id"]: site for site in all_sites}
-    payload = {
+    shared = {
         "schemaVersion": 1, "country": "US", "source": "FCC Universal Licensing System (ULS) complete license public access files",
         "sourceUrl": "https://wireless.fcc.gov/uls/documentation/pa_intro24.pdf", "sourceDate": source_date.date().isoformat(),
-        "importedAt": datetime.now(timezone.utc).date().isoformat(), "scope": f"{','.join(sorted(states))} · {len(archives)} FCC archive groups",
-        "services": {code: name for code, name in SERVICE_NAMES.items()}, "siteCount": len(compact),
-        "sites": sorted(compact.values(), key=lambda x: (x["service"], x["callSign"], x["id"])),
+        "importedAt": datetime.now(timezone.utc).date().isoformat(), "services": {code: name for code, name in SERVICE_NAMES.items()},
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    tmp = args.output.with_suffix(args.output.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
-    tmp.replace(args.output)
-    print(f"Wrote {args.output} · {len(compact):,} mapped active FCC license locations · {args.output.stat().st_size:,} bytes · source {payload['sourceDate']}", file=sys.stderr)
+    if args.spatial_tiles:
+        output_dir = args.output.parent / "fcc"
+        catalog_path = args.output.parent / "fcc-catalog.json"
+        if catalog_path.is_file():
+            try:
+                old_catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+                for old_tile in old_catalog.get("tiles", []):
+                    relative = Path(old_tile.get("path", ""))
+                    if relative.parts[:2] != ("data", "fcc") or relative.is_absolute():
+                        continue
+                    old_path = args.output.parent.parent / relative
+                    old_path.unlink(missing_ok=True)
+                    old_path.with_suffix(".json.gz").unlink(missing_ok=True)
+                    try: old_path.parent.rmdir()
+                    except OSError: pass
+            except (OSError, ValueError, TypeError):
+                print(f"Could not prune prior FCC tile snapshot from {catalog_path}; keeping existing files", file=sys.stderr)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        tile_size = 0.5
+        version = f"{shared['sourceDate']}-{shared['importedAt']}"
+        version_dir = output_dir / version
+        version_dir.mkdir(parents=True, exist_ok=True)
+        grouped: dict[tuple[int, int], list[dict]] = {}
+        for site in compact.values():
+            key = (math.floor(site["lat"] / tile_size), math.floor(site["lon"] / tile_size))
+            grouped.setdefault(key, []).append(site)
+        catalog = {**shared, "scope": f"FCC ULS mapped sites · {len(archives)} site-oriented archive groups", "version": version,
+                   "tileSizeDegrees": tile_size, "services": {code: name for code, name in SERVICE_NAMES.items()}, "siteCount": len(compact), "tileCount": len(grouped), "tiles": []}
+        for (lat_index, lon_index), tile_sites in sorted(grouped.items()):
+            tile_id = f"{lat_index}_{lon_index}"
+            ordered = sorted(tile_sites, key=lambda x: (x["service"], x["callSign"], x["id"]))
+            payload = {**shared, "scope": f"FCC ULS tile {tile_id}", "siteCount": len(ordered), "sites": ordered}
+            path = version_dir / f"{tile_id}.json"
+            encoded = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+            path.write_bytes(encoded)
+            compressed = gzip.compress(encoded, compresslevel=9, mtime=0)
+            path.with_suffix(".json.gz").write_bytes(compressed)
+            catalog["tiles"].append({"id": tile_id, "path": f"data/fcc/{version}/{tile_id}.json", "siteCount": len(ordered), "bytes": len(encoded), "transferBytes": len(compressed)})
+        catalog_bytes = (json.dumps(catalog, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        catalog_path.write_bytes(catalog_bytes)
+        catalog_path.with_suffix(".json.gz").write_bytes(gzip.compress(catalog_bytes, compresslevel=9, mtime=0))
+        print(f"Wrote {catalog_path} · {catalog['tileCount']:,} populated tiles · {catalog['siteCount']:,} mapped active locations · {sum(t['transferBytes'] for t in catalog['tiles']):,} bytes compressed · source {catalog['sourceDate']}", file=sys.stderr)
+    else:
+        payload = {**shared, "scope": f"{','.join(sorted(states))} · {len(archives)} FCC archive groups", "siteCount": len(compact),
+                   "sites": sorted(compact.values(), key=lambda x: (x["service"], x["callSign"], x["id"]))}
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        tmp = args.output.with_suffix(args.output.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+        tmp.replace(args.output)
+        print(f"Wrote {args.output} · {len(compact):,} mapped active FCC license locations · {args.output.stat().st_size:,} bytes · source {payload['sourceDate']}", file=sys.stderr)
 
 
 if __name__ == "__main__":

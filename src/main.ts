@@ -7,6 +7,8 @@ type Site = {
   safeTLabel?: string; safeTSource?: string; recordUrl?: string;
 };
 type Dataset = { schemaVersion: number; country: string; source: string; sourceUrl?: string; attribution?: string; sourceDate: string; importedAt: string; scope: string; services: Record<string,string>; siteCount: number; sites: Site[] };
+type TileInfo = { id: string; path: string; siteCount: number; bytes: number; transferBytes: number };
+type TileCatalog = { schemaVersion: number; sourceDate: string; importedAt: string; version: string; tileSizeDegrees: number; tileCount: number; siteCount: number; services: Record<string,string>; tiles: TileInfo[] };
 type Origin = { lat: number; lon: number; label: string };
 type Nearby = Site & { distance: number; bearing: number; relative: number };
 
@@ -14,8 +16,12 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const field = $('field'), video = $('camera') as HTMLVideoElement, markers = $('markers'), radarPoints = $('radar-points');
 const list = $('site-list'), radiusInput = $('radius') as HTMLInputElement;
 const serviceFilter = $('service-filter') as HTMLSelectElement, frequencyFilter = $('frequency-filter') as HTMLSelectElement;
-const countryFilter = $('country-filter') as HTMLSelectElement;
 let dataset: Dataset | null = null;
+let tileCatalog: TileCatalog | null = null;
+const tileById = new Map<string, TileInfo>();
+const loadedTiles = new Map<string, Site[]>();
+const pendingTiles = new Set<string>();
+const failedTileAt = new Map<string, number>();
 let origin: Origin | null = null;
 let heading: number | null = null;
 let cameraStream: MediaStream | null = null;
@@ -39,6 +45,7 @@ function distanceBetween(a: Origin, b: Site) {
 function compassPoint(deg: number) { return ['N','NE','E','SE','S','SW','W','NW'][Math.round(deg / 45) % 8]; }
 function normalize(deg: number) { return (deg + 360) % 360; }
 function formatDistance(miles: number) { return miles < 1 ? `${(miles * 5280 / 100).toFixed(0)} ft` : `${miles.toFixed(miles < 10 ? 1 : 0)} mi`; }
+function formatSize(bytes: number) { return bytes < 1_000_000 ? `${Math.max(1, Math.round(bytes / 1000))} KB` : `${(bytes / 1_000_000).toFixed(1)} MB`; }
 function isPublicSafety(site: Site) { return ['PW','GE','GF','GP','YE','YF','YP','SG','SY','YW','PA','SL','SP','QM','QO','QT','NC'].includes(site.service); }
 function inFrequencyFilter(site: Site) {
   const filter = frequencyFilter.value;
@@ -48,8 +55,7 @@ function inFrequencyFilter(site: Site) {
 }
 function visibleSites() {
   return nearbySites.filter(s => (isPublicSafety(s) ? ($('show-public-safety') as HTMLInputElement).checked : ($('show-other') as HTMLInputElement).checked)
-    && (countryFilter.value === 'all' || s.country === countryFilter.value)
-    && (serviceFilter.value === 'all' || `${s.country}:${s.service}` === serviceFilter.value) && inFrequencyFilter(s));
+    && (serviceFilter.value === 'all' || s.service === serviceFilter.value) && inFrequencyFilter(s));
 }
 function updateNearby() {
   const radius = Number(radiusInput.value);
@@ -69,8 +75,8 @@ function renderSites() {
   $('nearby-total').textContent = String(items.length);
   $('site-count').textContent = items.length ? `${items.length} nearby ${items.length === 1 ? 'site' : 'sites'}` : 'No nearby sites';
   if (!items.length) {
-    const message = !dataset ? 'License site data is not installed' : !origin ? 'Start to find nearby sites' : nearbySites.length ? 'No sites match these filters' : 'No active records in this radius';
-    list.innerHTML = `<div class="list-empty"><span>⌁</span><strong>${message}</strong><p>${!dataset ? 'Run an importer to build a compact dataset for its selected region(s).' : 'The phone filters license records locally. Your location is never sent to the data service.'}</p></div>`;
+    const message = !tileCatalog ? 'FCC coverage catalog unavailable' : !origin ? 'Start to find nearby sites' : !dataset ? 'Loading nearby FCC tiles' : nearbySites.length ? 'No sites match these filters' : 'No active records in this radius';
+    list.innerHTML = `<div class="list-empty"><span>⌁</span><strong>${message}</strong><p>${!tileCatalog ? 'No current FCC tile catalog is installed. The app will not substitute another country or region.' : !origin ? 'Tap Start to use live location, or set a local manual origin. Only coarse FCC data tiles around the chosen radius are downloaded; exact coordinates stay on this phone.' : 'The phone filters licensed records locally. Your precise location is never sent to the data service.'}</p></div>`;
     return;
   }
   const ordered = [...items].sort((a,b) => sortNearest ? a.distance - b.distance : a.bearing - b.bearing);
@@ -118,7 +124,7 @@ function showSite(id: string) {
   const site = nearbySites.find(s => s.id === id); if (!site) return;
   $('site-detail-heading').innerHTML = `<p class="detail-call">${escapeHtml(site.callSign)} · ${escapeHtml(site.service)}</p><div class="detail-title">${escapeHtml(site.siteName || site.licensee)}</div>`;
   const licenseLink = site.recordUrl || `https://wireless2.fcc.gov/UlsApp/UlsSearch/license.jsp?licKey=${encodeURIComponent(site.systemId)}`;
-  $('site-detail').innerHTML = `<div class="detail-grid"><div class="detail-item"><small>DIRECTION</small><span>${Math.round(site.bearing)}° ${compassPoint(site.bearing)}</span></div><div class="detail-item"><small>DISTANCE</small><span>${formatDistance(site.distance)}</span></div><div class="detail-item"><small>LICENSEE</small><span>${escapeHtml(site.licensee)}</span></div><div class="detail-item"><small>RADIO SERVICE</small><span>${escapeHtml(site.serviceName)} (${escapeHtml(site.service)}) · ${site.country}</span></div><div class="detail-item"><small>AUTHORIZED FREQUENCIES</small><span>${site.frequencies.length ? `${site.frequencies.slice(0,8).map(f => `${f.toFixed(4)} MHz`).join(', ')}${site.frequencies.length > 8 ? ` +${site.frequencies.length-8} more` : ''}` : 'Not available in this source record'}</span></div><div class="detail-item"><small>SITE</small><span>${escapeHtml([site.siteName,site.city,site.state].filter(Boolean).join(' · ') || 'Licensed site location')}</span></div></div><p class="notice">${site.confirmedSafeT ? `Confirmed SAFE-T reference: ${escapeHtml(site.safeTLabel || 'reviewed match')}.` : isPublicSafety(site) ? 'Active FCC public-safety license. This is not by itself a confirmed SAFE-T site or proof of a transmitter on air.' : 'Active license record with transmitter/location details available from the source. A licence does not prove a transmitter is on air or that a radio path is clear.'} The marker shows azimuth and distance only, not tower visibility or line of sight.</p><p class="detail-actions"><a href="${escapeHtml(licenseLink)}" target="_blank" rel="noopener">Open ${site.country === 'AU' ? 'ACMA RRL' : 'FCC ULS'} record ↗</a>${site.confirmedSafeT && site.safeTSource ? `<a href="${escapeHtml(site.safeTSource)}" target="_blank" rel="noopener">SAFE-T reference ↗</a>` : ''}</p>`;
+  $('site-detail').innerHTML = `<div class="detail-grid"><div class="detail-item"><small>DIRECTION</small><span>${Math.round(site.bearing)}° ${compassPoint(site.bearing)}</span></div><div class="detail-item"><small>DISTANCE</small><span>${formatDistance(site.distance)}</span></div><div class="detail-item"><small>LICENSEE</small><span>${escapeHtml(site.licensee)}</span></div><div class="detail-item"><small>RADIO SERVICE</small><span>${escapeHtml(site.serviceName)} (${escapeHtml(site.service)}) · United States</span></div><div class="detail-item"><small>AUTHORIZED FREQUENCIES</small><span>${site.frequencies.length ? `${site.frequencies.slice(0,8).map(f => `${f.toFixed(4)} MHz`).join(', ')}${site.frequencies.length > 8 ? ` +${site.frequencies.length-8} more` : ''}` : 'Not available in this source record'}</span></div><div class="detail-item"><small>SITE</small><span>${escapeHtml([site.siteName,site.city,site.state].filter(Boolean).join(' · ') || 'Licensed site location')}</span></div></div><p class="notice">${site.confirmedSafeT ? `Confirmed SAFE-T reference: ${escapeHtml(site.safeTLabel || 'reviewed match')}.` : isPublicSafety(site) ? 'Active FCC public-safety license. This is not by itself a confirmed SAFE-T site or proof of a transmitter on air.' : 'Active FCC license record with transmitter/location details available from the source. A license does not prove a transmitter is on air or that a radio path is clear.'} The marker shows azimuth and distance only, not tower visibility or line of sight.</p><p class="detail-actions"><a href="${escapeHtml(licenseLink)}" target="_blank" rel="noopener">Open FCC ULS record ↗</a>${site.confirmedSafeT && site.safeTSource ? `<a href="${escapeHtml(site.safeTSource)}" target="_blank" rel="noopener">SAFE-T reference ↗</a>` : ''}</p>`;
   ($('site-dialog') as HTMLDialogElement).showModal();
 }
 
@@ -145,7 +151,7 @@ function requestLocation() {
   if (watchId !== null) navigator.geolocation.clearWatch(watchId);
   watchId = navigator.geolocation.watchPosition(position => {
     origin = {lat:position.coords.latitude,lon:position.coords.longitude,label:'Live device location'}; usingManualOrigin = false;
-    $('gps-dot').classList.add('active'); $('origin-label').textContent = 'Using live device location'; updateNearby();
+    $('gps-dot').classList.add('active'); $('origin-label').textContent = 'Using live device location'; updateNearby(); void loadNearbyTiles();
   }, () => { if (!origin) $('origin-label').textContent = 'Location denied · set an origin'; $('gps-dot').classList.remove('active'); }, {enableHighAccuracy:true,maximumAge:15000,timeout:12000});
 }
 function requestOrientationPermission(): Promise<boolean> {
@@ -187,7 +193,7 @@ function saveManualOrigin(latText: string, lonText: string) {
   localStorage.setItem('antennar.manual-origin', JSON.stringify({lat,lon}));
   origin = {lat,lon,label:'Manual origin · stored on this device'}; usingManualOrigin = true;
   if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-  $('gps-dot').classList.add('active'); $('origin-label').textContent = 'Using manual origin · on device'; updateNearby();
+  $('gps-dot').classList.add('active'); $('origin-label').textContent = 'Using manual origin · on device'; updateNearby(); void loadNearbyTiles();
   ($('origin-dialog') as HTMLDialogElement).close(); ($('settings-dialog') as HTMLDialogElement).close();
 }
 function useLiveLocation() {
@@ -196,43 +202,105 @@ function useLiveLocation() {
   requestLocation(); ($('origin-dialog') as HTMLDialogElement).close(); ($('settings-dialog') as HTMLDialogElement).close();
 }
 
-async function loadDataset() {
-  const sources: Dataset[] = [];
-  for (const path of [`${import.meta.env.BASE_URL}data/fcc-sites.json`,`${import.meta.env.BASE_URL}data/acma-sites.json`]) {
+function tileIdsForOrigin(point: Origin, radiusMiles: number): string[] {
+  if (!tileCatalog) return [];
+  const size = tileCatalog.tileSizeDegrees;
+  const latPad = radiusMiles / 69;
+  const lonPad = radiusMiles / (69 * Math.max(0.15, Math.cos(point.lat * Math.PI / 180)));
+  const minLat = Math.max(-90, point.lat - latPad), maxLat = Math.min(90, point.lat + latPad);
+  const minLon = point.lon - lonPad, maxLon = point.lon + lonPad;
+  const firstLat = Math.floor(minLat / size), lastLat = Math.floor(maxLat / size);
+  const firstLon = Math.floor(minLon / size), lastLon = Math.floor(maxLon / size);
+  const longitudeCells = Math.round(360 / size), found: string[] = [];
+  for (let latIndex = firstLat; latIndex <= lastLat; latIndex++) {
+    for (let rawLonIndex = firstLon; rawLonIndex <= lastLon; rawLonIndex++) {
+      let lonIndex = ((rawLonIndex % longitudeCells) + longitudeCells) % longitudeCells;
+      if (lonIndex >= longitudeCells / 2) lonIndex -= longitudeCells;
+      const id = `${latIndex}_${lonIndex}`;
+      if (tileById.has(id)) found.push(id);
+    }
+  }
+  return [...new Set(found)];
+}
+function rebuildDataset() {
+  if (!tileCatalog) { dataset = null; return; }
+  const sites = [...loadedTiles.values()].flat();
+  dataset = {
+    schemaVersion: 1, country: 'US', source: 'FCC Universal Licensing System (ULS) complete license public access files',
+    sourceDate: tileCatalog.sourceDate, importedAt: tileCatalog.importedAt,
+    sourceUrl: 'https://wireless.fcc.gov/uls/documentation/pa_intro24.pdf',
+    scope: `${loadedTiles.size} cached geographic tiles`, services: tileCatalog.services, siteCount: sites.length, sites,
+  };
+}
+function updateTileStatus(ids: string[], failed = false) {
+  if (!tileCatalog) return;
+  const stale = (Date.now() - Date.parse(`${tileCatalog.sourceDate}T00:00:00Z`)) / 86400000 > 14;
+  const loaded = ids.filter(id => loadedTiles.has(id));
+  const neededBytes = ids.reduce((total, id) => total + (tileById.get(id)?.transferBytes || 0), 0);
+  const label = failed ? ' · some tiles unavailable' : '';
+  $('data-status').textContent = `${stale ? 'STALE · ' : ''}FCC ULS · ${loaded.length}/${ids.length} nearby tiles loaded${label}`;
+  $('data-date').textContent = `Source ${tileCatalog.sourceDate} · imported ${tileCatalog.importedAt} · up to ${formatSize(neededBytes)} for this radius`;
+  $('data-status').parentElement?.querySelector('.data-dot')?.classList.toggle('active', !stale && !failed && loaded.length === ids.length);
+}
+async function loadNearbyTiles() {
+  if (!tileCatalog || !origin) return;
+  const ids = tileIdsForOrigin(origin, Number(radiusInput.value));
+  const wanted = new Set(ids);
+  for (const id of loadedTiles.keys()) if (!wanted.has(id)) loadedTiles.delete(id);
+  rebuildDataset();
+  const missing = ids.filter(id => !loadedTiles.has(id) && !pendingTiles.has(id) && Date.now() - (failedTileAt.get(id) || 0) > 30_000);
+  const recentFailure = ids.some(id => Date.now() - (failedTileAt.get(id) || 0) <= 30_000);
+  updateTileStatus(ids, recentFailure);
+  if (!missing.length) { updateNearby(); return; }
+  $('data-status').textContent = `FCC ULS · downloading ${missing.length} nearby tile${missing.length === 1 ? '' : 's'}…`;
+  await Promise.all(missing.map(async id => {
+    const tile = tileById.get(id);
+    if (!tile) return;
+    pendingTiles.add(id);
     try {
-      const response = await fetch(path, {cache:'no-cache'});
-      if (!response.ok) continue;
+      const response = await fetch(`${import.meta.env.BASE_URL}${tile.path}`, {cache:'force-cache'});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const parsed = await response.json() as Dataset;
-      if (parsed.schemaVersion === 1 && Array.isArray(parsed.sites)) sources.push(parsed);
-    } catch { /* Country datasets are independently optional. */ }
-  }
-  if (!sources.length) {
-    $('data-status').textContent = 'License data not loaded'; $('data-date').textContent = 'No source date · build at least one country dataset';
-    list.innerHTML = '<div class="list-empty"><span>⌁</span><strong>License site data is not installed</strong><p>Run a regional FCC or ACMA import. The phone will filter it locally.</p></div>';
-    return;
-  }
-  const allSites = sources.flatMap(source => source.sites);
-  dataset = {schemaVersion:1,country:'MULTI',source:sources.map(s=>s.source).join(' · '),sourceDate:'',importedAt:'',scope:sources.map(s=>`${s.country}: ${s.scope}`).join(' · '),services:Object.fromEntries(sources.flatMap(s=>Object.entries(s.services).map(([k,v])=>[`${s.country}:${k}`,v]))),siteCount:allSites.length,sites:allSites};
-  const health = sources.map(source => {
-    const maxAge = source.country === 'AU' ? 8 : 14;
-    const age = source.sourceDate ? (Date.now() - Date.parse(`${source.sourceDate}T00:00:00Z`)) / 86400000 : Infinity;
-    return {source,stale:!Number.isFinite(age) || age > maxAge,label:source.country === 'AU' ? 'ACMA RRL' : 'FCC ULS'};
-  });
-  const stale = health.some(item=>item.stale);
-  $('data-status').textContent = `${stale ? 'STALE · ' : ''}${allSites.length.toLocaleString()} active mapped license locations · ${sources.map(s=>s.country).join(' + ')}`;
-  $('data-date').textContent = health.map(({source,label})=>`${label} source ${source.sourceDate || 'unknown'} · imported ${source.importedAt || 'unknown'}`).join('  |  ');
-  $('data-attribution').textContent = sources.find(source=>source.country==='AU'&&source.attribution)?.attribution || '';
-  $('data-status').parentElement?.querySelector('.data-dot')?.classList.toggle('active', !stale);
-  for (const country of [...new Set(sources.map(s=>s.country))]) { const option=document.createElement('option'); option.value=country; option.textContent=country === 'US' ? 'United States' : country === 'AU' ? 'Australia' : country; countryFilter.append(option); }
-  for (const [key,name] of Object.entries(dataset.services)) { const option=document.createElement('option'); option.value=key; option.textContent=`${name} · ${key.split(':')[0]}`; serviceFilter.append(option); }
-  const descriptions = sources.map(source => source.country === 'AU' ? 'ACMA RRL: currently Granted transmitters for organization clients only; natural-person records are excluded.' : 'FCC ULS: active records with mapped transmitter/location data from complete license archives.');
-  $('filter-explainer').textContent = `${descriptions.join(' ')} Imported scope: ${dataset.scope}. Filter country, service, and frequency locally.`;
+      if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.sites)) throw new Error('Invalid FCC tile');
+      loadedTiles.set(id, parsed.sites);
+      failedTileAt.delete(id);
+    } catch {
+      failedTileAt.set(id, Date.now());
+    } finally {
+      pendingTiles.delete(id);
+    }
+  }));
+  rebuildDataset();
+  const failed = ids.some(id => !loadedTiles.has(id) && failedTileAt.has(id));
+  updateTileStatus(ids, failed);
   updateNearby();
 }
+async function loadDataset() {
+  try {
+    const response = await fetch(`${import.meta.env.BASE_URL}data/fcc-catalog.json`, {cache:'no-cache'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    tileCatalog = await response.json() as TileCatalog;
+    if (tileCatalog.schemaVersion !== 1 || !Array.isArray(tileCatalog.tiles)) throw new Error('Invalid FCC catalog');
+    tileById.clear();
+    for (const tile of tileCatalog.tiles) tileById.set(tile.id, tile);
+    serviceFilter.replaceChildren(new Option('All included services', 'all'));
+    for (const [code, name] of Object.entries(tileCatalog.services)) { const option=document.createElement('option'); option.value=code; option.textContent=`${name} · ${code}`; serviceFilter.append(option); }
+    $('data-status').textContent = `FCC ULS · ${tileCatalog.tileCount.toLocaleString()} populated geographic tiles`;
+    $('data-date').textContent = `Source ${tileCatalog.sourceDate} · imported ${tileCatalog.importedAt}`;
+    $('filter-explainer').textContent = `FCC ULS site-oriented records only. The phone requests versioned 0.5° geographic cells around the current radius, downloads new cells as you move, and caches them on this device. Exact coordinates are not sent; service and frequency filters run locally. ${tileCatalog.siteCount.toLocaleString()} mapped active license locations are available across ${tileCatalog.tileCount.toLocaleString()} populated cells.`;
+    if (origin) void loadNearbyTiles(); else renderSites();
+  } catch {
+    tileCatalog = null; dataset = null; tileById.clear();
+    $('data-status').textContent = 'FCC data catalog unavailable · coverage gap';
+    $('data-date').textContent = 'No current FCC tile snapshot is installed';
+    $('data-status').parentElement?.querySelector('.data-dot')?.classList.remove('active');
+    $('filter-explainer').textContent = 'No FCC site snapshot is installed. The app does not substitute other-country records for U.S. coverage.';
+    $('site-list').innerHTML = '<div class="list-empty"><span>⌁</span><strong>FCC coverage is not installed</strong><p>Camera and compass view can run, but FCC site markers require a current tile import. The VPS stores only static public FCC files, not a user database.</p></div>';
+  }
+}
 
-radiusInput.addEventListener('input', updateNearby);
+radiusInput.addEventListener('input', () => { updateNearby(); void loadNearbyTiles(); });
 for (const id of ['show-public-safety','show-other']) $(id).addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
-countryFilter.addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
 serviceFilter.addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
 frequencyFilter.addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
 $('sort-button').addEventListener('click', () => { sortNearest = !sortNearest; $('sort-button').textContent = sortNearest ? 'Nearest first ↓' : 'Direction ↑'; renderSites(); });

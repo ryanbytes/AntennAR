@@ -4,6 +4,10 @@ tsconfig.tsbuildinfo
 .DS_Store
 public/data/fcc-sites.json
 public/data/acma-sites.json
+public/data/fcc-regions.json
+public/data/fcc-catalog.json
+public/data/fcc-catalog.json.gz
+public/data/fcc/
 data/raw/
 __pycache__/
 .venv/
