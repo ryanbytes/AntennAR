@@ -42,6 +42,16 @@ function bearingBetween(a: Origin, b: Site) {
   const y = Math.sin(dl) * Math.cos(p2), x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
   return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
+function cameraAzimuth(alpha: number, beta: number, gamma: number): number | null {
+  // DeviceOrientation is a Z-X'-Y'' rotation. Project the phone's rear-camera
+  // axis (-Z) onto the local east/north plane; alpha alone is only a heading
+  // when the phone is flat and becomes unreliable for a tilted/upright phone.
+  const rad = Math.PI / 180, a = alpha * rad, b = beta * rad, g = gamma * rad;
+  const east = -(Math.cos(a) * Math.sin(g) + Math.sin(a) * Math.sin(b) * Math.cos(g));
+  const north = -(Math.sin(a) * Math.sin(g) - Math.cos(a) * Math.sin(b) * Math.cos(g));
+  if (Math.hypot(east, north) < 0.25) return null;
+  return normalize(Math.atan2(east, north) * 180 / Math.PI);
+}
 function distanceBetween(a: Pick<Origin, 'lat' | 'lon'>, b: Pick<Origin, 'lat' | 'lon'>) {
   const rad = Math.PI / 180, dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
@@ -275,7 +285,9 @@ function onOrientation(event: Event) {
   const e = event as DeviceOrientationEvent & { webkitCompassHeading?:number; webkitCompassAccuracy?:number; absolute?:boolean };
   let degrees: number | null = null;
   if (typeof e.webkitCompassHeading === 'number' && (e.webkitCompassAccuracy === undefined || e.webkitCompassAccuracy < 45)) degrees = e.webkitCompassHeading;
-  else if (e.absolute && typeof e.alpha === 'number') degrees = normalize(360 - e.alpha);
+  else if (e.absolute && typeof e.alpha === 'number' && typeof e.beta === 'number' && typeof e.gamma === 'number') {
+    degrees = cameraAzimuth(e.alpha, e.beta, e.gamma);
+  }
   if (degrees === null) return;
   const now = Date.now();
   if (now - headingLastAt < 100) return;
