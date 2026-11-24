@@ -14,6 +14,7 @@ type Nearby = Site & { distance: number; bearing: number; relative: number };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const field = $('field'), video = $('camera') as HTMLVideoElement, markers = $('markers'), radarPoints = $('radar-points');
+const markerNodes = new Map<string, HTMLButtonElement>();
 const list = $('site-list'), radiusInput = $('radius') as HTMLInputElement;
 const serviceFilter = $('service-filter') as HTMLSelectElement, frequencyFilter = $('frequency-filter') as HTMLSelectElement;
 let dataset: Dataset | null = null;
@@ -48,6 +49,27 @@ function normalize(deg: number) { return (deg + 360) % 360; }
 function formatDistance(miles: number) { return miles < 1 ? `${(miles * 5280 / 100).toFixed(0)} ft` : `${miles.toFixed(miles < 10 ? 1 : 0)} mi`; }
 function formatSize(bytes: number) { return bytes < 1_000_000 ? `${Math.max(1, Math.round(bytes / 1000))} KB` : `${(bytes / 1_000_000).toFixed(1)} MB`; }
 function isPublicSafety(site: Site) { return ['PW','GE','GF','GP','YE','YF','YP','SG','SY','YW','PA','SL','SP','QM','QO','QT','NC'].includes(site.service); }
+type ServiceKind = 'public-safety' | 'broadcast' | 'microwave' | 'aviation' | 'mobile' | 'radio';
+function serviceKind(site: Site): ServiceKind {
+  const label = `${site.serviceName} ${site.service}`.toLowerCase();
+  if (isPublicSafety(site) || label.includes('public safety')) return 'public-safety';
+  if (/broadcast|television|tv station/.test(label)) return 'broadcast';
+  if (/microwave|fixed|point.to.point/.test(label)) return 'microwave';
+  if (/aviation|aircraft|aeronautical|air.ground/.test(label)) return 'aviation';
+  if (/cellular|mobile|paging|wireless|personal communications/.test(label)) return 'mobile';
+  return 'radio';
+}
+function serviceIcon(site: Site) {
+  const glyphs: Record<ServiceKind, string> = {
+    'public-safety': '<path d="M12 2.8 20 6v5.2c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V6l8-3.2Z"/><path d="M8 12h8M12 8v8"/>',
+    broadcast: '<path d="m12 5-5 16M12 5l5 16M8.5 16h7M10 11h4M6 7a8 8 0 0 1 0 10M18 7a8 8 0 0 0 0 10M3 4a12 12 0 0 1 0 16M21 4a12 12 0 0 0 0 16"/>',
+    microwave: '<path d="M4 6a12 12 0 0 0 12 12L4 6ZM4 6v12h12M16 18l4 4M19 4a8 8 0 0 1 0 11M16.5 6.5a4.5 4.5 0 0 1 0 6"/>',
+    aviation: '<path d="m12 2 2.3 8.3 6.2 3.2v2l-6.8-1.8L13 21l-1-1-1-6.3L4 15.5v-2l6.2-3.2L12 2Z"/>',
+    mobile: '<rect x="6" y="3" width="12" height="18" rx="2"/><path d="M10 17h4M3 7a13 13 0 0 0 0 10M21 7a13 13 0 0 1 0 10"/>',
+    radio: '<path d="M12 3v4M7 21l5-14 5 14M9 15h6M10.5 11h3M4 7a11 11 0 0 1 0 10M20 7a11 11 0 0 0 0 10"/>'
+  };
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${glyphs[serviceKind(site)]}</svg>`;
+}
 function inFrequencyFilter(site: Site) {
   const filter = frequencyFilter.value;
   if (filter === 'all') return true;
@@ -100,8 +122,9 @@ function updateFocusedTarget() {
 function escapeHtml(value: string) { return value.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!)); }
 
 function renderMarkers() {
-  markers.innerHTML = '';
-  if (!field.classList.contains('camera-on') || heading === null) return;
+  if (!field.classList.contains('camera-on') || heading === null) {
+    markers.replaceChildren(); markerNodes.clear(); return;
+  }
   const fov = 58;
   const candidates = visibleSites().filter(s => focusedSiteId === null || s.id === focusedSiteId).filter(s => {
     const delta = ((s.bearing - heading! + 540) % 360) - 180;
@@ -114,30 +137,40 @@ function renderMarkers() {
   const onscreen: Nearby[] = [];
   const occupiedSectors = new Set<number>();
   for (const site of candidates) {
-    const delta = ((site.bearing - heading! + 540) % 360) - 180;
-    const sector = Math.round(delta / 12);
+    const sector = Math.round(normalize(site.bearing) / 12) % 30;
     if (focusedSiteId !== null || !occupiedSectors.has(sector)) {
       onscreen.push(site);
       occupiedSectors.add(sector);
     }
     if (onscreen.length >= (focusedSiteId ? 1 : 5)) break;
   }
-  const nodes = onscreen.map((site,index) => {
+  const activeIds = new Set(onscreen.map(site => site.id));
+  for (const [id, node] of markerNodes) if (!activeIds.has(id)) { node.remove(); markerNodes.delete(id); }
+  for (const site of onscreen) {
     const delta = ((site.bearing - heading! + 540) % 360) - 180;
     const x = Math.max(3, Math.min(97, 50 + delta / (fov / 2) * 50));
-    const row = index % 3;
-    const y = 8 + row * 34;
-    const node = document.createElement('button');
+    const y = 54;
     const offscreen = Math.abs(delta) > fov / 2;
     const edge = x < 18 ? ' edge-left' : x > 82 ? ' edge-right' : '';
-    node.className = `marker${site.confirmedSafeT ? ' confirmed' : ''}${offscreen ? ' offscreen' : ''}${edge}`;
+    const focused = site.id === focusedSiteId;
+    const kind = serviceKind(site);
+    let node = markerNodes.get(site.id);
+    if (!node) {
+      node = document.createElement('button');
+      node.type = 'button';
+      node.addEventListener('click', () => {
+        if (focusedSiteId === node!.dataset.site) showSite(node!.dataset.site || '');
+        else { focusedSiteId = node!.dataset.site || null; renderSites(); renderMarkers(); }
+      });
+      markerNodes.set(site.id, node); markers.append(node);
+    }
+    node.dataset.site = site.id;
+    node.className = `marker service-${kind}${site.confirmedSafeT ? ' confirmed' : ''}${offscreen ? ' offscreen' : ''}${edge}${focused ? ' focused' : ''}`;
     node.style.left = `${x}%`; node.style.top = `${y}%`; node.setAttribute('aria-label', `${site.callSign}, ${Math.round(site.bearing)} degrees ${compassPoint(site.bearing)}, ${formatDistance(site.distance)}`);
     const cue = offscreen ? (delta > 0 ? 'TURN RIGHT' : 'TURN LEFT') : `${Math.round(site.bearing)}° ${compassPoint(site.bearing)}`;
-    node.innerHTML = `<span class="marker-pin"></span><span class="marker-card"><strong>${escapeHtml(site.siteName || site.callSign)}</strong><span>${cue} · ${formatDistance(site.distance)}</span></span>`;
-    node.addEventListener('click', () => showSite(site.id));
-    return node;
-  });
-  nodes.forEach(node => markers.append(node));
+    const content = `<span class="marker-pin">${serviceIcon(site)}</span>${focused ? `<span class="marker-card"><strong>${escapeHtml(site.siteName || site.callSign)}</strong><span>${cue} · ${formatDistance(site.distance)}</span></span>` : ''}`;
+    if (node.dataset.content !== content) { node.innerHTML = content; node.dataset.content = content; }
+  }
 }
 function renderRadar() {
   radarPoints.innerHTML = '';
@@ -209,8 +242,17 @@ function onOrientation(event: Event) {
     degrees = normalize(360 - e.alpha + screenAngle);
   }
   if (degrees === null) return;
-  const now = Date.now(); if (now - headingLastAt < 75) return; headingLastAt = now; orientationEvents++;
-  heading = normalize(degrees); $('heading').textContent = `${String(Math.round(heading)).padStart(3,'0')}°`; $('cardinal').textContent = compassPoint(heading); $('sensor-warning').classList.add('hidden');
+  const now = Date.now();
+  if (now - headingLastAt < 50) return;
+  const elapsed = headingLastAt ? Math.min(1000, now - headingLastAt) : 0;
+  if (heading === null) heading = normalize(degrees);
+  else {
+    const delta = ((degrees - heading + 540) % 360) - 180;
+    const smoothing = 1 - Math.exp(-elapsed / 360);
+    heading = normalize(heading + delta * smoothing);
+  }
+  headingLastAt = now; orientationEvents++;
+  $('heading').textContent = `${String(Math.round(heading)).padStart(3,'0')}°`; $('cardinal').textContent = compassPoint(heading); $('sensor-warning').classList.add('hidden');
   if (field.classList.contains('camera-on')) field.classList.remove('radar-on'); else field.classList.add('radar-on');
   updateRelative();
 }

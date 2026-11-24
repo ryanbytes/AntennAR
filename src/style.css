@@ -21,3 +21,20 @@ html,body{width:100%;min-width:0;overflow-x:hidden}
 .marker-card{position:absolute;top:17px;left:50%;width:min(145px,52vw);margin:0;transform:translateX(-50%)}
 .marker.edge-left .marker-card{left:0;transform:none;text-align:left}
 .marker.edge-right .marker-card{left:auto;right:0;transform:none;text-align:right}
+.marker-layer{top:0;bottom:0;height:auto}
+.marker{width:42px;height:42px;transform:translate(-50%,-50%);transition:left 120ms linear;touch-action:manipulation}
+.marker-pin{display:grid;width:42px;height:42px;margin:0;place-items:center;border:1px solid currentColor;border-radius:50%;background:#10201fee;color:var(--mint);box-shadow:0 0 0 4px #8ee3be25,0 3px 12px #0008}
+.marker-pin svg{display:block;width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.marker.service-public-safety .marker-pin{color:#8fd9ff;box-shadow:0 0 0 4px #8fd9ff22,0 3px 12px #0008}
+.marker.service-broadcast .marker-pin{color:#ffd27b;box-shadow:0 0 0 4px #ffd27b22,0 3px 12px #0008}
+.marker.service-microwave .marker-pin{color:#9bc5ff;box-shadow:0 0 0 4px #9bc5ff22,0 3px 12px #0008}
+.marker.service-aviation .marker-pin{color:#d5b5ff;box-shadow:0 0 0 4px #d5b5ff22,0 3px 12px #0008}
+.marker.service-mobile .marker-pin{color:#8ee3be}
+.marker.service-radio .marker-pin{color:#b7d9b0}
+.marker.confirmed .marker-pin{color:#f4c96d;background:#302818}
+.marker.offscreen .marker-pin{border-style:dashed}
+.marker-card{display:none;z-index:4;top:calc(100% + 8px);left:50%;width:min(170px,55vw);transform:translateX(-50%);text-align:left}
+.marker.focused .marker-card{display:block}
+.marker.edge-left .marker-card{left:0;right:auto;transform:none}
+.marker.edge-right .marker-card{left:auto;right:0;transform:none;text-align:right}
+.marker.focused{z-index:5}
