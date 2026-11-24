@@ -66,7 +66,7 @@ Other free downloads are not automatically free to repackage. [Canada’s ISED t
 - Coordinates from live GPS are held in page memory, used for local filtering, never placed in URLs or sent to a server, and not logged. Manual coordinates are stored in browser `localStorage` only.
 - Camera video is attached directly to a local `<video>` element. The app has no analytics, advertising, tracking code, external font loads, or location-aware server endpoint.
 - Host the built static files over HTTPS. Keep JSON static and do not add a location API. The GitHub Pages deployment uses same-origin app assets, has no analytics or third-party scripts, and benefits from GitHub's HTTPS hosting; GitHub Pages does not provide custom response headers, so a future move to a host with header configuration should set a restrictive Content Security Policy and same-origin Permissions Policy. The dynamic marker UI uses inline style attributes, so `style-src` needs to allow inline styles unless those positions are changed to CSS classes.
-- Deployment is automated through GitHub Actions. The workflow imports source data, builds the PWA, and publishes the artifact to GitHub Pages on main-branch updates and weekly refreshes.
+- Deployment is automated through GitHub Actions. The workflow attempts both source imports, builds and publishes when at least one regional snapshot is available, and runs on main-branch updates and weekly refreshes. Failed imports remain visibly absent from the data filters instead of silently substituting stale or invented records.
 
 The PWA shell and the last loaded compact JSON snapshots can be cached by the service worker. Refresh once online after importing a new data snapshot; the on-screen source date makes cached/stale data visible.
 

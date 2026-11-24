@@ -38,11 +38,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
       - name: Import active FCC ULS locations
+        continue-on-error: true
         run: >-
           python tools/import_fcc.py
-          --states "AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC"
+          --states "AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC,AS,GU,MP,PR,VI"
       - name: Import current ACMA RRL transmitters
+        continue-on-error: true
         run: python tools/import_acma.py --states "ACT,NSW,NT,QLD,SA,TAS,VIC,WA"
+      - name: Require at least one current source snapshot
+        run: test -s public/data/fcc-sites.json -o -s public/data/acma-sites.json
       - name: Build PWA
         run: npm run build
       - name: Configure GitHub Pages artifact
