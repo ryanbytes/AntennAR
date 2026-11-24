@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#101a1c" />
+    <meta name="description" content="Aim an antenna using nearby radio site bearings." />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <title>AntennAR — Field view</title>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand"><span class="brand-mark">A</span><span>AntennAR</span></div>
+        <button class="icon-button" id="settings-toggle" aria-label="Open settings">☷</button>
+      </header>
+
+      <section class="field" id="field" aria-label="Antenna aiming field view">
+        <video id="camera" autoplay muted playsinline aria-hidden="true"></video>
+        <div class="field-shade"></div>
+        <div class="sensor-warning hidden" id="sensor-warning" role="status"></div>
+        <div class="field-topline">
+          <span class="live-pill"><i></i><span id="view-mode">RADAR VIEW</span></span>
+          <span class="heading-readout"><b id="heading">—</b><small id="cardinal">HEADING</small></span>
+        </div>
+        <div class="azimuth-guide"><span>W</span><span class="north-label">N</span><span>E</span></div>
+        <div class="horizon"></div>
+        <div class="marker-layer" id="markers" aria-label="Nearby site markers"></div>
+        <div class="radar" id="radar" aria-hidden="true">
+          <span class="radar-ring ring-one"></span><span class="radar-ring ring-two"></span><span class="radar-ring ring-three"></span>
+          <span class="radar-north">N</span><span class="radar-center"></span><div class="radar-points" id="radar-points"></div>
+        </div>
+        <div class="empty-field" id="empty-field">
+          <div class="aim-icon">⌖</div>
+          <strong>Ready when you are</strong>
+          <p>Start the field view to use your camera, compass and current location.</p>
+        </div>
+        <div class="field-bottomline"><span id="site-count">No nearby sites</span><span id="radius-chip">10 mi radius</span></div>
+      </section>
+
+      <section class="controls" aria-label="Aiming controls">
+        <button class="start-button" id="start-button"><span class="start-icon">▶</span><span id="start-label">Start field view</span></button>
+        <div class="radius-control">
+          <div class="control-heading"><label for="radius">Search radius</label><output id="radius-value">10 mi</output></div>
+          <input id="radius" type="range" min="1" max="50" step="1" value="10" />
+          <div class="range-labels"><span>1 mi</span><span>50 mi</span></div>
+        </div>
+        <div class="status-row"><span class="status-dot" id="gps-dot"></span><span id="origin-label">Location not started</span><button id="origin-edit">Set origin</button></div>
+      </section>
+
+      <section class="nearby-section">
+        <div class="section-heading"><div><p class="eyebrow">FIELD TARGETS</p><h1>Nearby sites <span id="nearby-total">0</span></h1></div><button class="text-button" id="sort-button">Nearest first ↓</button></div>
+        <div class="filter-row">
+          <label class="filter-toggle"><input id="show-public-safety" type="checkbox" checked /><span>Public safety</span></label>
+          <label class="filter-toggle"><input id="show-other" type="checkbox" checked /><span>Other active</span></label>
+          <select id="country-filter" aria-label="Filter by country"><option value="all">All countries</option></select>
+          <select id="service-filter" aria-label="Filter by radio service"><option value="all">All included services</option></select>
+          <select id="frequency-filter" aria-label="Filter by frequency range"><option value="all">All frequencies</option><option value="vhf">VHF · 30–300 MHz</option><option value="uhf">UHF · 300–1000 MHz</option><option value="700800">700/800 MHz</option><option value="other">Other</option></select>
+        </div>
+        <div class="site-list" id="site-list"><div class="list-empty"><span>⌁</span><strong>Start to find nearby sites</strong><p>Site records are filtered on this phone. Your location is never sent to the data service.</p></div></div>
+      </section>
+
+      <footer class="data-footer"><div class="data-indicator"><span class="data-dot"></span><span id="data-status">License data not loaded</span></div><span id="data-date">No source date</span><span class="attribution" id="data-attribution"></span><p>License records do not confirm that a transmitter is on air, that a tower is visible, or that a path is clear.</p></footer>
+    </main>
+
+    <dialog id="settings-dialog" class="sheet">
+      <form method="dialog"><div class="sheet-grabber"></div><div class="sheet-header"><div><p class="eyebrow">LOCAL SETTINGS</p><h2>Field setup</h2></div><button class="icon-button" aria-label="Close settings">×</button></div>
+        <div class="setting-block"><h3>Origin override</h3><p>Use your live device location by default. A manual origin is stored only on this device.</p><div class="coordinate-fields"><label>Latitude<input id="manual-lat" inputmode="decimal" placeholder="Latitude" /></label><label>Longitude<input id="manual-lon" inputmode="decimal" placeholder="Longitude" /></label></div><div class="setting-actions"><button type="button" class="secondary-button" id="save-origin">Save origin on device</button><button type="button" class="quiet-button" id="clear-origin">Use device location</button></div></div>
+        <div class="setting-block"><h3>Sensor help</h3><p>Camera and compass work only in a secure HTTPS context (localhost is allowed for development). On iPhone, tap Start to grant motion and compass access. If the heading looks jumpy, calibrate the compass away from metal and electronics, or use the radar view.</p></div>
+        <div class="setting-block"><h3>Data scope</h3><p id="filter-explainer">Filter the locally installed country, service, and frequency records.</p><p>SAFE-T is marked confirmed only when a record is explicitly cross-referenced by the optional reviewed SAFE-T match file.</p></div>
+      </form>
+    </dialog>
+
+    <dialog id="site-dialog" class="sheet site-sheet"><form method="dialog"><div class="sheet-grabber"></div><div class="sheet-header"><div id="site-detail-heading"></div><button class="icon-button" aria-label="Close site details">×</button></div><div id="site-detail"></div></form></dialog>
+    <dialog id="origin-dialog" class="sheet"><form method="dialog"><div class="sheet-grabber"></div><div class="sheet-header"><div><p class="eyebrow">ORIGIN</p><h2>Choose your position</h2></div><button class="icon-button" aria-label="Close">×</button></div><div class="setting-block"><p>Device location stays on this phone. You can also set an approximate origin stored locally.</p><div class="coordinate-fields"><label>Latitude<input id="quick-lat" inputmode="decimal" placeholder="Latitude" /></label><label>Longitude<input id="quick-lon" inputmode="decimal" placeholder="Longitude" /></label></div><div class="setting-actions"><button class="secondary-button" id="quick-save" type="button">Use this origin</button><button class="quiet-button" id="quick-live" type="button">Use live location</button></div></div></form></dialog>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

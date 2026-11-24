@@ -1,0 +1,56 @@
+name: Refresh radio data and deploy AntennAR
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 8 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Import active FCC ULS locations
+        run: >-
+          python tools/import_fcc.py
+          --states "AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC"
+      - name: Import current ACMA RRL transmitters
+        run: python tools/import_acma.py --states "ACT,NSW,NT,QLD,SA,TAS,VIC,WA"
+      - name: Build PWA
+        run: npm run build
+      - name: Configure GitHub Pages artifact
+        uses: actions/configure-pages@v5
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - name: Deploy site
+        id: deployment
+        uses: actions/deploy-pages@v4

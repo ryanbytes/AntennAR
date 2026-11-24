@@ -1,0 +1,256 @@
+import './style.css';
+
+type Site = {
+  id: string; country: string; systemId: string; callSign: string; licensee: string; service: string;
+  serviceName: string; state: string; city: string; siteName: string;
+  lat: number; lon: number; frequencies: number[]; confirmedSafeT?: boolean;
+  safeTLabel?: string; safeTSource?: string; recordUrl?: string;
+};
+type Dataset = { schemaVersion: number; country: string; source: string; sourceUrl?: string; attribution?: string; sourceDate: string; importedAt: string; scope: string; services: Record<string,string>; siteCount: number; sites: Site[] };
+type Origin = { lat: number; lon: number; label: string };
+type Nearby = Site & { distance: number; bearing: number; relative: number };
+
+const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const field = $('field'), video = $('camera') as HTMLVideoElement, markers = $('markers'), radarPoints = $('radar-points');
+const list = $('site-list'), radiusInput = $('radius') as HTMLInputElement;
+const serviceFilter = $('service-filter') as HTMLSelectElement, frequencyFilter = $('frequency-filter') as HTMLSelectElement;
+const countryFilter = $('country-filter') as HTMLSelectElement;
+let dataset: Dataset | null = null;
+let origin: Origin | null = null;
+let heading: number | null = null;
+let cameraStream: MediaStream | null = null;
+let watchId: number | null = null;
+let usingManualOrigin = false;
+let nearbySites: Nearby[] = [];
+let headingLastAt = 0;
+let orientationEvents = 0;
+let sortNearest = true;
+
+function bearingBetween(a: Origin, b: Site) {
+  const rad = Math.PI / 180, p1 = a.lat * rad, p2 = b.lat * rad, dl = (b.lon - a.lon) * rad;
+  const y = Math.sin(dl) * Math.cos(p2), x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+function distanceBetween(a: Origin, b: Site) {
+  const rad = Math.PI / 180, dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
+  return 3958.7613 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+function compassPoint(deg: number) { return ['N','NE','E','SE','S','SW','W','NW'][Math.round(deg / 45) % 8]; }
+function normalize(deg: number) { return (deg + 360) % 360; }
+function formatDistance(miles: number) { return miles < 1 ? `${(miles * 5280 / 100).toFixed(0)} ft` : `${miles.toFixed(miles < 10 ? 1 : 0)} mi`; }
+function isPublicSafety(site: Site) { return ['PW','GE','GF','GP','YE','YF','YP','SG','SY','YW','PA','SL','SP','QM','QO','QT','NC'].includes(site.service); }
+function inFrequencyFilter(site: Site) {
+  const filter = frequencyFilter.value;
+  if (filter === 'all') return true;
+  const inBand = (f: number) => filter === 'vhf' ? f >= 30 && f < 300 : filter === 'uhf' ? f >= 300 && f < 700 || f > 800 && f <= 1000 : filter === '700800' ? f >= 700 && f <= 800 : f < 30 || f > 1000;
+  return site.frequencies.some(inBand);
+}
+function visibleSites() {
+  return nearbySites.filter(s => (isPublicSafety(s) ? ($('show-public-safety') as HTMLInputElement).checked : ($('show-other') as HTMLInputElement).checked)
+    && (countryFilter.value === 'all' || s.country === countryFilter.value)
+    && (serviceFilter.value === 'all' || `${s.country}:${s.service}` === serviceFilter.value) && inFrequencyFilter(s));
+}
+function updateNearby() {
+  const radius = Number(radiusInput.value);
+  $('radius-value').textContent = `${radius} mi`;
+  $('radius-chip').textContent = `${radius} mi radius`;
+  if (!origin || !dataset) { nearbySites = []; renderSites(); return; }
+  nearbySites = dataset.sites.map(site => ({ ...site, distance: distanceBetween(origin!, site), bearing: bearingBetween(origin!, site), relative: 0 }))
+    .filter(site => site.distance <= radius)
+    .sort((a,b) => a.distance - b.distance);
+  nearbySites.forEach(site => site.relative = heading === null ? site.bearing : normalize(site.bearing - heading));
+  renderSites(); renderMarkers(); renderRadar();
+}
+function updateRelative() { nearbySites.forEach(site => site.relative = heading === null ? site.bearing : normalize(site.bearing - heading)); renderMarkers(); renderRadar(); }
+
+function renderSites() {
+  const items = visibleSites();
+  $('nearby-total').textContent = String(items.length);
+  $('site-count').textContent = items.length ? `${items.length} nearby ${items.length === 1 ? 'site' : 'sites'}` : 'No nearby sites';
+  if (!items.length) {
+    const message = !dataset ? 'License site data is not installed' : !origin ? 'Start to find nearby sites' : nearbySites.length ? 'No sites match these filters' : 'No active records in this radius';
+    list.innerHTML = `<div class="list-empty"><span>⌁</span><strong>${message}</strong><p>${!dataset ? 'Run an importer to build a compact dataset for its selected region(s).' : 'The phone filters license records locally. Your location is never sent to the data service.'}</p></div>`;
+    return;
+  }
+  const ordered = [...items].sort((a,b) => sortNearest ? a.distance - b.distance : a.bearing - b.bearing);
+  list.innerHTML = ordered.map(site => `<button class="site-card" data-site="${escapeHtml(site.id)}"><span class="site-direction">${compassPoint(site.bearing)}</span><span class="site-main"><span class="site-title"><strong>${escapeHtml(site.siteName || site.licensee || site.callSign)}</strong>${site.confirmedSafeT ? '<span class="badge confirmed">SAFE-T</span>' : isPublicSafety(site) ? '<span class="badge">PUBLIC SAFETY</span>' : '<span class="badge">ACTIVE LICENSE</span>'}</span><span class="site-meta">${escapeHtml(site.callSign)} · ${escapeHtml(site.licensee)} · ${escapeHtml(site.serviceName)} · ${site.country}</span></span><span class="site-distance">${formatDistance(site.distance)}<small>${Math.round(site.bearing)}° ${compassPoint(site.bearing)}</small></span></button>`).join('');
+  list.querySelectorAll<HTMLButtonElement>('.site-card').forEach(button => button.addEventListener('click', () => showSite(button.dataset.site || '')));
+}
+function escapeHtml(value: string) { return value.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!)); }
+
+function renderMarkers() {
+  markers.innerHTML = '';
+  if (!field.classList.contains('camera-on') || heading === null) return;
+  const fov = 58;
+  const onscreen = visibleSites().filter(s => {
+    const delta = ((s.bearing - heading! + 540) % 360) - 180;
+    s.relative = normalize(delta);
+    return Math.abs(delta) <= fov / 2;
+  }).sort((a,b) => a.relative - b.relative);
+  const placed: {x:number;y:number}[] = [];
+  const nodes = onscreen.slice(0, 12).map((site,index) => {
+    const delta = ((site.bearing - heading! + 540) % 360) - 180;
+    const x = Math.max(11, Math.min(89, 50 + delta / (fov / 2) * 50));
+    let y = 11 + (index % 3) * 22;
+    for (const prior of placed) if (Math.abs(prior.x-x) < 19 && Math.abs(prior.y-y) < 14) y = Math.min(72, y + 17);
+    placed.push({x,y});
+    const node = document.createElement('button');
+    node.className = `marker${site.confirmedSafeT ? ' confirmed' : ''}`;
+    node.style.left = `${x}%`; node.style.top = `${y}%`; node.setAttribute('aria-label', `${site.callSign}, ${Math.round(site.bearing)} degrees ${compassPoint(site.bearing)}, ${formatDistance(site.distance)}`);
+    node.innerHTML = `<span class="marker-pin"></span><span class="marker-card"><strong>${escapeHtml(site.siteName || site.callSign)}</strong><span>${Math.round(site.bearing)}° ${compassPoint(site.bearing)} · ${formatDistance(site.distance)}</span></span>`;
+    node.addEventListener('click', () => showSite(site.id));
+    return node;
+  });
+  nodes.forEach(node => markers.append(node));
+}
+function renderRadar() {
+  radarPoints.innerHTML = '';
+  const max = Number(radiusInput.value);
+  for (const site of visibleSites().slice(0, 40)) {
+    const distance = Math.min(0.46, site.distance / max * 0.46), angle = site.bearing * Math.PI / 180;
+    const dot = document.createElement('i'); dot.className = `radar-dot${site.confirmedSafeT ? ' confirmed' : ''}`;
+    dot.style.left = `${50 + Math.sin(angle) * distance * 100}%`; dot.style.top = `${50 - Math.cos(angle) * distance * 100}%`; dot.title = `${site.callSign} ${Math.round(site.bearing)}°`;
+    radarPoints.append(dot);
+  }
+}
+function showSite(id: string) {
+  const site = nearbySites.find(s => s.id === id); if (!site) return;
+  $('site-detail-heading').innerHTML = `<p class="detail-call">${escapeHtml(site.callSign)} · ${escapeHtml(site.service)}</p><div class="detail-title">${escapeHtml(site.siteName || site.licensee)}</div>`;
+  const licenseLink = site.recordUrl || `https://wireless2.fcc.gov/UlsApp/UlsSearch/license.jsp?licKey=${encodeURIComponent(site.systemId)}`;
+  $('site-detail').innerHTML = `<div class="detail-grid"><div class="detail-item"><small>DIRECTION</small><span>${Math.round(site.bearing)}° ${compassPoint(site.bearing)}</span></div><div class="detail-item"><small>DISTANCE</small><span>${formatDistance(site.distance)}</span></div><div class="detail-item"><small>LICENSEE</small><span>${escapeHtml(site.licensee)}</span></div><div class="detail-item"><small>RADIO SERVICE</small><span>${escapeHtml(site.serviceName)} (${escapeHtml(site.service)}) · ${site.country}</span></div><div class="detail-item"><small>AUTHORIZED FREQUENCIES</small><span>${site.frequencies.length ? `${site.frequencies.slice(0,8).map(f => `${f.toFixed(4)} MHz`).join(', ')}${site.frequencies.length > 8 ? ` +${site.frequencies.length-8} more` : ''}` : 'Not available in this source record'}</span></div><div class="detail-item"><small>SITE</small><span>${escapeHtml([site.siteName,site.city,site.state].filter(Boolean).join(' · ') || 'Licensed site location')}</span></div></div><p class="notice">${site.confirmedSafeT ? `Confirmed SAFE-T reference: ${escapeHtml(site.safeTLabel || 'reviewed match')}.` : isPublicSafety(site) ? 'Active FCC public-safety license. This is not by itself a confirmed SAFE-T site or proof of a transmitter on air.' : 'Active license record with transmitter/location details available from the source. A licence does not prove a transmitter is on air or that a radio path is clear.'} The marker shows azimuth and distance only, not tower visibility or line of sight.</p><p class="detail-actions"><a href="${escapeHtml(licenseLink)}" target="_blank" rel="noopener">Open ${site.country === 'AU' ? 'ACMA RRL' : 'FCC ULS'} record ↗</a>${site.confirmedSafeT && site.safeTSource ? `<a href="${escapeHtml(site.safeTSource)}" target="_blank" rel="noopener">SAFE-T reference ↗</a>` : ''}</p>`;
+  ($('site-dialog') as HTMLDialogElement).showModal();
+}
+
+async function startField() {
+  $('start-button').setAttribute('aria-busy','true');
+  $('start-label').textContent = 'Starting sensors…';
+  field.classList.add('started');
+  field.classList.add('radar-on');
+  const orientationPermission = requestOrientationPermission();
+  const issues: string[] = [];
+  if (!window.isSecureContext) issues.push('Camera and motion sensors require HTTPS in phone browsers. Use localhost while developing.');
+  if (navigator.mediaDevices?.getUserMedia && window.isSecureContext) {
+    try { cameraStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false}); video.srcObject = cameraStream; field.classList.add('camera-on'); $('view-mode').textContent = 'CAMERA VIEW'; }
+    catch { issues.push('Camera access is unavailable. The compass/radar view will still work.'); }
+  } else issues.push('Camera unavailable here. The compass/radar view will still work.');
+  if (!usingManualOrigin && watchId === null) requestLocation();
+  if (await orientationPermission) attachOrientation();
+  else showHeadingHelp('Compass permission was unavailable. Use the radar view, or allow motion access in browser settings.');
+  if (issues.length) { $('sensor-warning').textContent = issues.join(' '); $('sensor-warning').classList.remove('hidden'); }
+  $('start-label').textContent = 'Field view running'; $('start-button').querySelector('.start-icon')!.textContent = '●'; $('start-button').removeAttribute('aria-busy');
+}
+function requestLocation() {
+  if (!navigator.geolocation) { $('origin-label').textContent = 'Location unavailable'; return; }
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  watchId = navigator.geolocation.watchPosition(position => {
+    origin = {lat:position.coords.latitude,lon:position.coords.longitude,label:'Live device location'}; usingManualOrigin = false;
+    $('gps-dot').classList.add('active'); $('origin-label').textContent = 'Using live device location'; updateNearby();
+  }, () => { if (!origin) $('origin-label').textContent = 'Location denied · set an origin'; $('gps-dot').classList.remove('active'); }, {enableHighAccuracy:true,maximumAge:15000,timeout:12000});
+}
+function requestOrientationPermission(): Promise<boolean> {
+  if (typeof DeviceOrientationEvent === 'undefined') return Promise.resolve(false);
+  type OrientationCtor = typeof DeviceOrientationEvent & { requestPermission?: () => Promise<'granted'|'denied'> };
+  const EventCtor = DeviceOrientationEvent as OrientationCtor;
+  if (typeof EventCtor.requestPermission !== 'function') return Promise.resolve(true);
+  // Invoke synchronously from Start's click handler; iOS requires transient user activation.
+  try { return EventCtor.requestPermission().then(permission => permission === 'granted').catch(() => false); }
+  catch { return Promise.resolve(false); }
+}
+function attachOrientation() {
+  window.addEventListener('deviceorientation', onOrientation, true);
+  window.addEventListener('deviceorientationabsolute', onOrientation as EventListener, true);
+  $('cardinal').textContent = 'CALIBRATING'; $('radar').setAttribute('aria-hidden','false');
+  setTimeout(() => {
+    if (orientationEvents === 0) showHeadingHelp('Heading is unavailable. Move outdoors, calibrate the compass, or use radar bearings relative to north.');
+  }, 5000);
+}
+function onOrientation(event: Event) {
+  const e = event as DeviceOrientationEvent & { webkitCompassHeading?:number; webkitCompassAccuracy?:number; absolute?:boolean };
+  let degrees: number | null = null;
+  if (typeof e.webkitCompassHeading === 'number' && (e.webkitCompassAccuracy === undefined || e.webkitCompassAccuracy < 45)) degrees = e.webkitCompassHeading;
+  else if (e.absolute && typeof e.alpha === 'number') degrees = 360 - e.alpha;
+  if (degrees === null) return;
+  const now = Date.now(); if (now - headingLastAt < 75) return; headingLastAt = now; orientationEvents++;
+  heading = normalize(degrees); $('heading').textContent = `${String(Math.round(heading)).padStart(3,'0')}°`; $('cardinal').textContent = compassPoint(heading); $('sensor-warning').classList.add('hidden');
+  if (field.classList.contains('camera-on')) field.classList.remove('radar-on'); else field.classList.add('radar-on');
+  updateRelative();
+}
+function showHeadingHelp(message: string) {
+  heading = null; $('heading').textContent = '—'; $('cardinal').textContent = 'NO HEADING';
+  field.classList.remove('camera-on'); field.classList.add('radar-on'); $('view-mode').textContent = 'RADAR VIEW';
+  $('sensor-warning').textContent = message; $('sensor-warning').classList.remove('hidden'); updateNearby();
+}
+function saveManualOrigin(latText: string, lonText: string) {
+  const lat = Number(latText), lon = Number(lonText);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat)>90 || Math.abs(lon)>180) { alert('Enter a valid latitude and longitude.'); return; }
+  localStorage.setItem('antennar.manual-origin', JSON.stringify({lat,lon}));
+  origin = {lat,lon,label:'Manual origin · stored on this device'}; usingManualOrigin = true;
+  if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  $('gps-dot').classList.add('active'); $('origin-label').textContent = 'Using manual origin · on device'; updateNearby();
+  ($('origin-dialog') as HTMLDialogElement).close(); ($('settings-dialog') as HTMLDialogElement).close();
+}
+function useLiveLocation() {
+  localStorage.removeItem('antennar.manual-origin'); origin = null; usingManualOrigin = false;
+  $('origin-label').textContent = 'Location not started'; $('gps-dot').classList.remove('active');
+  requestLocation(); ($('origin-dialog') as HTMLDialogElement).close(); ($('settings-dialog') as HTMLDialogElement).close();
+}
+
+async function loadDataset() {
+  const sources: Dataset[] = [];
+  for (const path of [`${import.meta.env.BASE_URL}data/fcc-sites.json`,`${import.meta.env.BASE_URL}data/acma-sites.json`]) {
+    try {
+      const response = await fetch(path, {cache:'no-cache'});
+      if (!response.ok) continue;
+      const parsed = await response.json() as Dataset;
+      if (parsed.schemaVersion === 1 && Array.isArray(parsed.sites)) sources.push(parsed);
+    } catch { /* Country datasets are independently optional. */ }
+  }
+  if (!sources.length) {
+    $('data-status').textContent = 'License data not loaded'; $('data-date').textContent = 'No source date · build at least one country dataset';
+    list.innerHTML = '<div class="list-empty"><span>⌁</span><strong>License site data is not installed</strong><p>Run a regional FCC or ACMA import. The phone will filter it locally.</p></div>';
+    return;
+  }
+  const allSites = sources.flatMap(source => source.sites);
+  dataset = {schemaVersion:1,country:'MULTI',source:sources.map(s=>s.source).join(' · '),sourceDate:'',importedAt:'',scope:sources.map(s=>`${s.country}: ${s.scope}`).join(' · '),services:Object.fromEntries(sources.flatMap(s=>Object.entries(s.services).map(([k,v])=>[`${s.country}:${k}`,v]))),siteCount:allSites.length,sites:allSites};
+  const health = sources.map(source => {
+    const maxAge = source.country === 'AU' ? 8 : 14;
+    const age = source.sourceDate ? (Date.now() - Date.parse(`${source.sourceDate}T00:00:00Z`)) / 86400000 : Infinity;
+    return {source,stale:!Number.isFinite(age) || age > maxAge,label:source.country === 'AU' ? 'ACMA RRL' : 'FCC ULS'};
+  });
+  const stale = health.some(item=>item.stale);
+  $('data-status').textContent = `${stale ? 'STALE · ' : ''}${allSites.length.toLocaleString()} active mapped license locations · ${sources.map(s=>s.country).join(' + ')}`;
+  $('data-date').textContent = health.map(({source,label})=>`${label} source ${source.sourceDate || 'unknown'} · imported ${source.importedAt || 'unknown'}`).join('  |  ');
+  $('data-attribution').textContent = sources.find(source=>source.country==='AU'&&source.attribution)?.attribution || '';
+  $('data-status').parentElement?.querySelector('.data-dot')?.classList.toggle('active', !stale);
+  for (const country of [...new Set(sources.map(s=>s.country))]) { const option=document.createElement('option'); option.value=country; option.textContent=country === 'US' ? 'United States' : country === 'AU' ? 'Australia' : country; countryFilter.append(option); }
+  for (const [key,name] of Object.entries(dataset.services)) { const option=document.createElement('option'); option.value=key; option.textContent=`${name} · ${key.split(':')[0]}`; serviceFilter.append(option); }
+  const descriptions = sources.map(source => source.country === 'AU' ? 'ACMA RRL: currently Granted transmitters for organization clients only; natural-person records are excluded.' : 'FCC ULS: active records with mapped transmitter/location data from complete license archives.');
+  $('filter-explainer').textContent = `${descriptions.join(' ')} Imported scope: ${dataset.scope}. Filter country, service, and frequency locally.`;
+  updateNearby();
+}
+
+radiusInput.addEventListener('input', updateNearby);
+for (const id of ['show-public-safety','show-other']) $(id).addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
+countryFilter.addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
+serviceFilter.addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
+frequencyFilter.addEventListener('change', () => { renderSites(); renderMarkers(); renderRadar(); });
+$('sort-button').addEventListener('click', () => { sortNearest = !sortNearest; $('sort-button').textContent = sortNearest ? 'Nearest first ↓' : 'Direction ↑'; renderSites(); });
+$('settings-toggle').addEventListener('click', () => ($('settings-dialog') as HTMLDialogElement).showModal());
+$('origin-edit').addEventListener('click', () => ($('origin-dialog') as HTMLDialogElement).showModal());
+$('start-button').addEventListener('click', () => { if (field.classList.contains('started')) { locationStop(); } else void startField(); });
+function locationStop() {
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId); watchId = null;
+  cameraStream?.getTracks().forEach(track => track.stop()); cameraStream = null; video.srcObject = null;
+  window.removeEventListener('deviceorientation', onOrientation, true); window.removeEventListener('deviceorientationabsolute', onOrientation as EventListener, true);
+  field.classList.remove('started','camera-on'); $('start-label').textContent='Start field view'; $('start-button').querySelector('.start-icon')!.textContent='▶'; $('view-mode').textContent='RADAR VIEW';
+  heading = null; orientationEvents = 0; $('heading').textContent='—'; $('cardinal').textContent='HEADING'; field.classList.remove('radar-on'); renderMarkers(); renderRadar();
+}
+$('save-origin').addEventListener('click', () => saveManualOrigin(($('manual-lat') as HTMLInputElement).value, ($('manual-lon') as HTMLInputElement).value));
+$('quick-save').addEventListener('click', () => saveManualOrigin(($('quick-lat') as HTMLInputElement).value, ($('quick-lon') as HTMLInputElement).value));
+$('clear-origin').addEventListener('click', useLiveLocation); $('quick-live').addEventListener('click', useLiveLocation);
+const saved = localStorage.getItem('antennar.manual-origin');
+if (saved) try { const point=JSON.parse(saved) as {lat:number;lon:number}; if (Number.isFinite(point.lat)&&Number.isFinite(point.lon)) { origin={...point,label:'Manual origin · stored on this device'}; usingManualOrigin=true; $('origin-label').textContent='Using manual origin · on device'; $('gps-dot').classList.add('active'); } } catch { localStorage.removeItem('antennar.manual-origin'); }
+window.addEventListener('beforeunload', locationStop);
+void loadDataset();
+if ('serviceWorker' in navigator && import.meta.env.PROD) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL });

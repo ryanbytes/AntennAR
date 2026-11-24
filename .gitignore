@@ -1,0 +1,9 @@
+node_modules/
+dist/
+tsconfig.tsbuildinfo
+.DS_Store
+public/data/fcc-sites.json
+public/data/acma-sites.json
+data/raw/
+__pycache__/
+.venv/
